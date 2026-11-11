@@ -85,7 +85,7 @@ def _signal(code: str, name: str, status: str, explanation: str, formula: str | 
         "previous_value": previous, "unit": unit, "current_period": current_period,
         "previous_period": previous_period, "formula": formula, "explanation": explanation,
         "supporting_observations": [_obs_payload(row) for row in (evidence or [])],
-        "human_review_required": status == "watch", "rule_version": RULE_VERSION,
+        "human_review_required": status in {"watch", "needs_review"}, "rule_version": RULE_VERSION,
         "next_step": next_step or suggested_next_steps.get(code),
     }
 
@@ -141,7 +141,7 @@ def build_thesis_drift(db: Session, company: Company, basis: str = "consolidated
             [item for item in (get("revenue", older), prev_rev, rev, get("pat", older), prev_pat, pat) if item], "pp"))
     else:
         earnings.append(_signal("revenue_pat_growth", "Revenue versus PAT growth", "insufficient_data",
-            "At least two validated, comparable periods of both revenue and PAT are required.", None))
+            "At least two validated, comparable periods of both revenue and PAT are required.", None, unit="pp"))
 
     for key, label, row, prior in (("pbt_margin", "PBT margin", pbt, rev), ("pat_margin", "PAT margin", pat, rev), ("ebitda_margin", "EBITDA margin", ebitda, rev)):
         prior_metric = {"pbt_margin": prev_pbt, "pat_margin": prev_pat, "ebitda_margin": prev_ebitda}[key]
@@ -230,9 +230,9 @@ def build_thesis_drift(db: Session, company: Company, basis: str = "consolidated
             tagged.append({"id": item.id, "date": item.announcement_datetime.isoformat() if item.announcement_datetime else None,
                            "subject": item.subject, "category": classification["category"],
                            "materiality": classification["materiality"], "url": item.attachment_url or item.source_page_url})
-    governance_signals = [_signal("recent_disclosures", "Recent capital and governance disclosures", "watch" if tagged else "insufficient_data",
+    governance_signals = [_signal("recent_disclosures", "Recent capital and governance disclosures", "needs_review" if tagged else "insufficient_data",
         f"{len(tagged)} exchange disclosures matched FINN's capital/governance categories in the last 12 months. These are triage matches, not findings that a disclosure is new, adverse or material.",
-        None, current=float(len(tagged)), unit="disclosures")]
+        None, current=float(len(tagged)), current_period=tagged[0]["date"][:10] if tagged and tagged[0]["date"] else None, unit="disclosures")]
     signal_groups.append({"code": "governance_capital", "name": "Governance & capital allocation", "signals": governance_signals,
         "coverage_state": "available" if tagged else "insufficient_data", "disclosures": tagged[:8]})
 

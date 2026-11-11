@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b1115" />
+    <title>FINN — Investment intelligence</title>
+    <link rel="stylesheet" href="./styles.css?v=thesis-drift-1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail" aria-label="Primary navigation">
+        <a class="brand" href="#today" aria-label="FINN home"><span class="brand-mark">f</span><span class="brand-name">finn<span class="brand-dot">.</span></span></a>
+        <div class="rail-label">WORKSPACE</div>
+        <nav class="primary-nav">
+          <button class="nav-item active" data-view="today"><span class="nav-glyph">▦</span><span>Today</span><span class="nav-count">3</span></button>
+          <button class="nav-item" data-view="research"><span class="nav-glyph">⌕</span><span>Research</span></button>
+        </nav>
+        <div class="rail-divider"></div>
+        <div class="rail-label">YOUR PORTFOLIO <button class="tiny-plus" aria-label="Add holding">+</button></div>
+        <div class="holding-list" id="holdingList"></div>
+        <div class="rail-bottom"><div class="avatar">AS</div><div><strong>Analyst workspace</strong><small>Demo portfolio</small></div><span class="more">···</span></div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <div class="breadcrumb"><span>Workspace</span><i>/</i><strong id="crumb">Today</strong></div>
+          <div class="top-actions">
+            <button class="mode-toggle" id="dataModeToggle" aria-label="Switch between demo and live data"><span class="mode-indicator"></span><span id="modeLabel">DEMO DATA</span><span class="mode-chevron">⌄</span></button>
+            <span class="freshness-label" id="freshnessLabel">Fixtures only</span>
+            <div class="market-state"><span class="live-dot"></span><span id="marketStateText">Market closed</span><span class="state-divider"></span><span>NSE</span></div>
+            <button class="icon-button search-trigger" aria-label="Search" title="Search companies"><span>⌕</span></button>
+            <button class="icon-button notification-button" aria-label="Notifications"><span>♧</span><b></b></button>
+            <div class="top-avatar">AS</div>
+          </div>
+        </header>
+
+        <section class="view active" id="todayView" aria-labelledby="todayTitle">
+          <div class="page-heading">
+            <div><div class="eyebrow"><span class="eyebrow-line"></span> MONDAY, 9 NOVEMBER 2026</div><h1 id="todayTitle">Good morning, Analyst<span class="period">.</span></h1><p class="page-subtitle">A clear view of what changed across your portfolio.</p></div>
+            <label class="date-control"><span class="calendar-icon">▦</span><select id="digestWindow" aria-label="Digest time window"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="custom">Custom dates</option></select><span class="chevron">⌄</span></label>
+          </div>
+          <div class="demo-notice"><span class="notice-icon">i</span><span><strong>Illustrative demo</strong> — sample events and figures are fictional and shown for product demonstration.</span><button aria-label="Dismiss demo notice" id="dismissNotice">×</button></div>
+
+          <div class="overview-row">
+            <div class="overview-copy"><span class="section-kicker">YOUR PORTFOLIO</span><div class="overview-title"><strong id="holdingCount">18</strong><span>holdings</span><span class="overview-sep"></span><span id="developmentCount">3 developments to review</span></div></div>
+            <div class="market-mini"><span class="market-label">NIFTY 50</span><strong>—</strong><span class="neutral-tag">EOD data</span><span class="mini-spark" aria-hidden="true"><svg viewBox="0 0 96 24"><path d="M1 18 L13 16 L22 19 L33 10 L43 13 L53 7 L63 11 L74 5 L83 8 L95 3"/></svg></span></div>
+          </div>
+
+          <div class="content-grid">
+            <div class="feed-column">
+              <div class="section-head"><div><span class="section-kicker">THE BRIEFING</span><h2>Worth your attention <span class="muted-count">03</span></h2></div><button class="text-button" id="viewAll">View all <span>→</span></button></div>
+              <div class="briefing-card" id="briefingCard">
+                <div class="briefing-index">01</div><div class="briefing-body"><div class="briefing-meta"><span class="company-chip tata-chip">TP</span><strong>Tata Power</strong><span class="ticker-label">NSE · TATAPOWER</span><span class="meta-spacer"></span><span class="priority-dot high"></span><span class="priority-word">HIGH</span></div><h3>Quarterly results filed</h3><p>Operating performance changed across the quarter. Compare the reported figures with management’s previous outlook.</p><div class="briefing-foot"><span class="source-pill"><span class="file-glyph">▤</span> Results filing</span><span class="briefing-time">Illustrative · 08:42</span><button class="investigate-button" data-company="TATAPOWER">Investigate <span>↗</span></button></div></div>
+              </div>
+              <div class="digest-custom" id="digestCustom" hidden><label>From <input type="date" id="digestFrom"></label><label>To <input type="date" id="digestTo"></label><button id="applyDigestDates">Apply</button></div>
+              <div class="digest-range" id="digestRange">Last 24 hours · Asia/Kolkata</div>
+              <div class="digest-counts" id="digestCounts"></div>
+              <div class="feed-toolbar"><div class="feed-title"><span class="section-kicker">PORTFOLIO ACTIVITY</span><span class="feed-total" id="feedTotal">3 items</span></div><div class="filters"><label class="select-wrap"><span class="sr-only">Filter by priority</span><select id="priorityFilter"><option value="all">All materiality</option><option value="high">High</option><option value="medium">Medium</option><option value="routine">Routine</option></select></label><label class="select-wrap category-filter"><span class="sr-only">Filter by category</span><select id="categoryFilter"><option value="all">All categories</option></select></label></div></div>
+              <div class="activity-list" id="activityList"></div>
+              <button class="load-more" id="loadMore">Show routine items <span>↓</span></button>
+            </div>
+            <aside class="right-column">
+              <div class="side-card signal-card"><div class="side-card-head"><span class="section-kicker">SIGNAL MIX</span><span class="more">···</span></div><h3 id="signalHeading">3 developments surfaced</h3><p id="signalDescription">Prioritised by potential impact, new information and portfolio relevance.</p><div class="signal-rows"><div><span class="signal-bar high-bar"></span><span>High priority</span><b id="signalHigh">1</b></div><div><span class="signal-bar monitor-bar"></span><span>Medium priority</span><b id="signalMedium">1</b></div><div><span class="signal-bar routine-bar"></span><span>Routine</span><b id="signalRoutine">1</b></div></div><div class="signal-note"><span>i</span><span id="signalNote">Priority reflects transparent rules; it is not an investment recommendation.</span></div></div>
+              <div class="side-card alert-card"><div class="side-card-head"><span class="section-kicker">TRIGGERED ALERTS</span><button class="text-button" id="openAlertSettings">Settings</button></div><div id="alertHistory"><div class="empty-filter">No triggered alerts loaded.</div></div><button class="alert-refresh" id="evaluateAlerts">Evaluate EOD and filing rules ↻</button><div class="source-freshness" id="sourceFreshness">Source timestamps load with Live Data.</div><button class="alert-refresh refresh-data-button" id="refreshData">Refresh stored market, NSE filings and Tata Power documents ↻</button><div class="source-freshness" id="refreshProgress" role="status"></div></div>
+              <div class="side-card saved-card"><div class="side-card-head"><span class="section-kicker">SAVED FOR LATER</span><span class="saved-count" id="savedCount">0</span></div><div class="saved-empty" id="savedEmpty"><span class="bookmark-outline">♧</span><div><strong>Your reading list is clear</strong><p>Save an announcement to return to it here.</p></div></div><div id="savedList"></div></div>
+              <div class="desk-note"><span class="desk-spark">✳</span><div><strong>From signal to context</strong><p>FINN connects what happened today with what management said before.</p><button data-view="research">Explore Research <span>→</span></button></div></div>
+            </aside>
+          </div>
+          <footer class="page-footer"><span>FINN INTELLIGENCE DESK</span><span id="todayFooterText">Data shown is illustrative · 09 Nov 2026</span></footer>
+        </section>
+
+        <section class="view" id="researchView" aria-labelledby="researchTitle">
+          <div class="page-heading research-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span> COMPANY INTELLIGENCE</div><h1 id="researchTitle">Research<span class="period">.</span></h1><p class="page-subtitle">Start with the evidence. Build the context over time.</p></div><label class="company-search"><span>⌕</span><input id="companySearch" type="search" placeholder="Search company or ticker" autocomplete="off"/><kbd>⌘ K</kbd><div class="search-results" id="searchResults"></div></label></div>
+          <div class="demo-notice compact-notice"><span class="notice-icon">i</span><span><strong>Live source data</strong> — financial figures appear only after review and link to the original filing.</span><button aria-label="Dismiss demo notice" class="dismissResearch">×</button></div>
+          <div class="company-hero"><div class="company-identity"><div class="company-monogram">TP</div><div><div class="company-title-row"><h2 id="companyName">Tata Power Company</h2><span class="exchange-badge">NSE</span></div><div class="company-subline"><span id="companyTicker">TATAPOWER</span><span class="subline-dot"></span><span id="companySector">Utilities</span><span class="universe-pill" id="companyUniverseLabel">PORTFOLIO</span></div></div></div><div class="company-market"><span class="section-kicker">LATEST PRICE · EOD</span><strong id="companyLatestPrice">— <small>INR</small></strong><span id="companyPriceDate">No market record loaded</span></div><button class="company-more icon-button" aria-label="Company options">···</button></div>
+          <nav class="company-tabs" aria-label="Company sections"><button class="selected">Overview</button><button data-tab="financials">Financials</button><button data-tab="commitments">Commitments <span class="tab-new">CORE</span></button><button data-tab="documents">Documents</button></nav>
+          <section class="commitments-view" id="commitmentsView" hidden>
+            <div class="commitment-summary-strip" id="commitmentSummary"><span>Loading management guidance…</span></div><div id="narrativeNumbersNote" class="narrative-numbers-note"></div>
+            <div class="commitment-toolbar"><div><span class="section-kicker">MANAGEMENT ACCOUNTABILITY</span><h2>What was said. What followed.</h2></div><div class="commitment-filters"><select id="commitmentCandidateCategory" aria-label="Prioritise review candidates"><option value="all">All candidate categories</option><option value="financial">Financial guidance first</option><option value="operational">Operational</option><option value="qualitative">Qualitative</option></select><select id="commitmentTypeFilter" aria-label="Filter by statement type"><option value="all">All statement types</option></select><select id="commitmentStatusFilter" aria-label="Filter by assessment status"><option value="all">All statuses</option><option>needs_review</option><option>awaiting_outcome</option><option>in_progress</option><option>not_comparable</option><option>achieved</option><option>missed</option></select><select id="commitmentPeriodFilter" aria-label="Filter by fiscal period"><option value="all">All periods</option></select><select id="commitmentTopicFilter" aria-label="Filter by topic"><option value="all">All topics</option></select></div></div>
+            <div class="commitment-review-queue" id="commitmentReviewQueue"></div>
+            <div class="commitment-timeline" id="commitmentTimeline"><div class="empty-filter">Select Live Data to load source-linked transcript candidates.</div></div>
+          </section>
+          <div class="research-grid">
+            <div class="research-main">
+              <div class="section-head research-section-head"><div><span class="section-kicker">COMPANY OVERVIEW</span><h2>Business at a glance</h2></div><button class="subtle-button" id="sourceMethod">Source policy <span>↗</span></button></div>
+              <div class="business-card"><div class="business-copy"><span class="business-label">BUSINESS PROFILE</span><p id="businessDescription">An integrated power company with interests across generation, renewables, transmission and distribution.</p><span class="illustrative-inline">Company profile · demo description</span></div><div class="segment-block"><span class="business-label">SEGMENTS</span><div class="segment-tags" id="segmentTags"><span>Generation</span><span>Renewables</span><span>Transmission</span><span>Distribution</span></div><div class="segment-caption">Revenue mix will appear when verified source data is connected.</div></div></div>
+              <div class="section-head metrics-head"><div><span class="section-kicker">LATEST REPORTED PERIOD</span><h2>Financial snapshot</h2></div><span class="period-placeholder" id="financialPeriod">Period unavailable</span></div>
+              <div class="financial-basis-row"><span id="financialBasis">Consolidated · INR crore</span><span id="financialCoverage">Financial statements not yet processed.</span></div>
+              <div class="financial-control-row"><label>Statement basis <select id="financialBasisSelect"><option value="consolidated">Consolidated</option><option value="standalone">Standalone</option></select></label><span id="financialSeriesLabel">Quarterly income statement</span></div>
+              <div class="metrics-grid" id="financialMetrics"><div class="metric-card"><div class="metric-label">REVENUE <span>₹</span></div><strong>—</strong><small>Awaiting source data</small></div><div class="metric-card"><div class="metric-label">EBITDA <span>₹</span></div><strong>—</strong><small>Awaiting source data</small></div><div class="metric-card"><div class="metric-label">PBT <span>₹</span></div><strong>—</strong><small>Awaiting source data</small></div><div class="metric-card"><div class="metric-label">PAT <span>₹</span></div><strong>—</strong><small>Awaiting source data</small></div></div>
+              <section class="thesis-drift" id="thesisDrift" aria-labelledby="thesisDriftTitle"><div class="section-head"><div><span class="section-kicker">EVIDENCE-DRIVEN CHANGE MONITOR</span><h2 id="thesisDriftTitle">Thesis Drift</h2></div><span id="thesisDriftPeriod" class="period-placeholder">Loading verified signals…</span></div><p class="thesis-drift-intro" id="thesisDriftIntro">Comparing validated financial observations and primary disclosures.</p><div id="thesisDriftSummary" class="thesis-drift-summary"></div><div id="thesisDriftGroups" class="thesis-drift-groups"></div><details class="thesis-coverage"><summary>Coverage and unavailable indicators</summary><div id="thesisDriftCoverage"></div></details></section>
+              <div class="section-head trajectory-head"><div><span class="section-kicker">PERFORMANCE OVER TIME</span><h2>Financial trajectory</h2></div><div class="chart-period-tabs"><button class="active" data-period="quarterly">Quarterly</button><button data-period="annual">Annual</button></div></div>
+              <div class="trajectory-metrics" role="group" aria-label="Trajectory metric"><button class="active" data-metric="revenue">Revenue</button><button data-metric="pbt">PBT</button><button data-metric="pat">PAT</button></div>
+              <div class="chart-card"><div class="chart-placeholder" id="financialChart"><div class="chart-empty"><div class="chart-icon">⌁</div><strong>Evidence will fill this view</strong><span>Verified financial values appear here.</span></div></div><div class="chart-footer"><span id="chartFooterText">Quarterly values · INR crore · verified source observations only.</span><button id="chartSource">How we calculate <span>↗</span></button></div></div>
+              <section class="financial-analysis" id="financialAnalysis"><div class="section-head"><div><span class="section-kicker">BALANCE SHEET & CASH QUALITY</span><h2>Cash, debt and coverage</h2></div><span id="analysisPeriod" class="period-placeholder">Annual values</span></div><div id="analysisSignals" class="analysis-signals"></div><div id="analysisCards" class="analysis-cards"><p>Validated annual balance-sheet and cash-flow rows will appear here.</p></div><div id="analysisObservations" class="financial-year-grid"></div></section>
+              <div class="section-head developments-head"><div><span class="section-kicker">WHAT CHANGED</span><h2>Recent developments <span class="muted-count">02</span></h2></div><button class="text-button" data-view="today">All activity <span>→</span></button></div><div id="companyDevelopments" class="company-developments"></div>
+            </div>
+            <aside class="research-aside">
+              <div class="commitment-card" id="commitmentCard"><div class="commitment-top"><div><span class="section-kicker">FINN REMEMBERS</span><span class="commitment-tag">CORE CAPABILITY</span></div><span class="memory-icon">↺</span></div><h3>Management commitments</h3><p>What leadership said. What the company delivered. Always linked to the source.</p><div class="commitment-empty"><div class="commitment-line"><span class="empty-bullet"></span><span></span></div><div class="commitment-line short"><span class="empty-bullet"></span><span></span></div><div class="commitment-line"><span class="empty-bullet"></span><span></span></div></div><div class="commitment-foot"><span id="commitmentDocCount">0 verified commitments</span><button id="commitmentInfo">How it works <span>→</span></button></div></div>
+              <div class="ask-card"><div class="ask-heading"><span class="ask-icon">✳</span><div><span class="section-kicker">INVESTIGATE</span><h3>Ask about this company</h3></div></div><div class="suggested-questions"><button>How has revenue changed over the last three financial years? <span>↗</span></button><button>How has profitability changed over the last four quarters? <span>↗</span></button><button>How have borrowings and net debt changed? <span>↗</span></button><button>Is operating cash flow keeping pace with PAT? <span>↗</span></button><button>What did management say about growth, and what happened afterwards? <span>↗</span></button><button>What are the most important positive and negative developments? <span>↗</span></button></div><form class="ask-form" id="askForm"><input id="askInput" placeholder="Ask a research question..." aria-label="Ask a research question"/><button aria-label="Submit question">↑</button></form><p class="ask-disclaimer">Evidence-grounded answers · no model provider configured</p><div id="researchAnswer" class="research-answer" aria-live="polite"></div></div>
+              <div class="source-card"><div class="source-card-head"><span class="section-kicker">RESEARCH COVERAGE</span><span class="coverage-dot"></span></div><div class="source-empty"><span class="document-icon">▤</span><div><strong id="sourceCoverageTitle">Checking coverage…</strong><p id="sourceCoverageText">Source and processing status for this company.</p></div></div><div id="coveragePanel" class="coverage-panel"></div><div id="sourceDocumentList"></div><button id="connectSources" class="connect-button">View source requirements <span>→</span></button></div>
+            </aside>
+          </div>
+          <footer class="page-footer"><span>FINN INTELLIGENCE DESK</span><span>Primary sources only · No broker research</span></footer>
+        </section>
+      </main>
+
+      <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active" data-view="today"><span>▦</span>Today</button><button data-view="research"><span>⌕</span>Research</button><button id="mobilePortfolio"><span>◫</span>Portfolio</button></nav>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <dialog id="detailDialog" class="detail-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close details">×</button></form><div id="dialogContent"></div></dialog>
+    <script src="./app.js?v=thesis-drift-1"></script>
+  </body>
+</html>

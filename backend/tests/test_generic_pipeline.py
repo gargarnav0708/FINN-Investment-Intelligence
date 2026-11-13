@@ -217,6 +217,7 @@ def test_screener_page_parsing():
     reports = [d for d in page.documents if d.document_type == "annual_report"]
     assert [d.document_date for d in transcripts] == [date(2026, 10, 31), date(2026, 7, 31)]
     assert reports[0].fiscal_year == "FY 2025 - 2026" and reports[0].url.endswith("1001.pdf")
+    assert [r.document_date.year for r in reports] == [2026, 2025, 2024]  # "Annual Report 2024" label format too
     assert not any(d.url.endswith(".mp3") for d in page.documents)
     sales = [r for r in page.rows if r.section == "quarters" and r.metric == "revenue"]
     assert len(sales) == 6 and sales[-1].period_end == date(2026, 9, 30) and sales[-1].value == Decimal("16100")

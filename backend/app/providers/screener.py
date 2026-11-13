@@ -131,10 +131,11 @@ def parse_documents(soup: BeautifulSoup) -> list[ScreenerDocument]:
     if annual:
         for link in annual.find_all("a", href=True):
             title = " ".join(link.get_text(" ", strip=True).split())
-            year = re.search(r"(?:Financial\s+Year\s+|FY\s*)(\d{4})", title, re.I)
+            year = re.search(r"(?:Financial\s+Year|Annual\s+Report|FY)\s*(?:20\d{2}\s*[-–]\s*)?(20\d{2}|\d{2})\b", title, re.I)
             if not year:
                 continue
-            end_year = int(year.group(1))
+            token = year.group(1)
+            end_year = int(token) if len(token) == 4 else 2000 + int(token)
             url = urljoin(BASE, link["href"])
             if url in seen:
                 continue

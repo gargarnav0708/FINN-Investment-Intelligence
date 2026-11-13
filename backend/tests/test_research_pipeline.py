@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -10,8 +10,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.database import Base, get_db
-from backend.app.main import app
-from backend.app.models import Company, FinancialObservation, SourceDocument
+from backend.app.main import _results_context, app
+from backend.app.models import Announcement, Company, FinancialObservation, SourceDocument
+from backend.app.intelligence import classify_announcement
 from backend.app.research import (
     calculate_comparison,
     classify_page,
@@ -126,4 +127,52 @@ def test_financial_api_returns_period_basis_and_evidence_reference():
         assert revenue["qoq"]["percentage_change"] == 100 / 90 * 10
     finally:
         app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_results_context_includes_four_validated_metrics_and_period_comparisons():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with Session() as db:
+            seed_companies(db)
+            company = db.scalar(select(Company).where(Company.ticker == "TATAPOWER"))
+            source = SourceDocument(company_id=company.id, dedupe_key="results-context-doc", title="Q2 results source", document_type="quarterly_results", fiscal_year="FY 2026 - 2027", quarter="Q2", landing_page_url="https://example.com/results", source="fixture")
+            db.add(source)
+            db.flush()
+            periods = [
+                (date(2026, 7, 1), date(2026, 9, 30), "FY 2026 - 2027", "Q2", 120),
+                (date(2026, 4, 1), date(2026, 6, 30), "FY 2026 - 2027", "Q1", 100),
+                (date(2025, 7, 1), date(2025, 9, 30), "FY 2025 - 2026", "Q2", 80),
+            ]
+            for metric_index, metric in enumerate(("revenue", "ebitda", "pbt", "pat")):
+                for start, end, fiscal_year, quarter, base in periods:
+                    value = base + metric_index * 10
+                    db.add(FinancialObservation(
+                        evidence_key=f"results-{metric}-{end.isoformat()}", company_id=company.id, document_id=source.id,
+                        canonical_metric=metric, reported_label=metric.upper(), reported_value_raw=str(value),
+                        numeric_value=Decimal(value), currency="INR", reported_unit="INR crore",
+                        normalised_value_in_crore=Decimal(value), period_start=start, period_end=end,
+                        fiscal_year=fiscal_year, fiscal_quarter=quarter, period_type="quarterly", statement_basis="consolidated",
+                        extraction_method="fixture", extraction_status="validated", page_number=7 + metric_index,
+                        source_quote=f"{metric.upper()} {value}", table_title="Consolidated results", row_label=metric.upper(),
+                        column_header=f"Quarter ended {end.isoformat()}", parser_version="test",
+                    ))
+            announcement = Announcement(company_id=company.id, exchange="NSE", external_announcement_id="results-context", dedupe_key="results-context-announcement", subject="Quarterly Financial Results", original_category="Financial Results", announcement_datetime=datetime(2026, 11, 2), source_page_url="https://example.com/results", source="fixture")
+            db.add(announcement)
+            db.commit()
+            context = _results_context(db, announcement, classify_announcement(announcement))
+            assert context["status"] == "available"
+            assert context["statement_basis"] == "consolidated"
+            assert set(context["metrics"]) == {"revenue", "ebitda", "pbt", "pat"}
+            revenue = context["metrics"]["revenue"]
+            assert revenue["value_in_crore"] == 120
+            assert revenue["qoq"]["previous_value_in_crore"] == 100
+            assert revenue["qoq"]["percentage_change"] == 20
+            assert revenue["yoy"]["previous_value_in_crore"] == 80
+            assert revenue["yoy"]["percentage_change"] == 50
+            assert revenue["document_title"] == "Q2 results source"
+            assert revenue["page_number"] == 7
+    finally:
         engine.dispose()

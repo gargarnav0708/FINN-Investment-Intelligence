@@ -53,6 +53,8 @@ def test_digest_time_window_uses_ist_and_excludes_undated_without_substitution()
             now = datetime(2026, 11, 9, 12, 0, tzinfo=IST)
             rows = [
                 parse_announcement({"seq_id": "recent", "an_dt": "09-Nov-2026 10:00:00", "subject": "Financial Results"}, company.ticker),
+                parse_announcement({"seq_id": "older-high", "an_dt": "08-Nov-2026 10:00:00", "subject": "Material litigation disclosed"}, company.ticker),
+                parse_announcement({"seq_id": "new-medium", "an_dt": "09-Nov-2026 11:00:00", "subject": "Capacity addition commissioning update"}, company.ticker),
                 parse_announcement({"seq_id": "older", "an_dt": "01-Nov-2026 10:00:00", "subject": "Shareholding Pattern"}, company.ticker),
                 parse_announcement({"seq_id": "undated", "subject": "General update"}, company.ticker),
             ]
@@ -64,16 +66,18 @@ def test_digest_time_window_uses_ist_and_excludes_undated_without_substitution()
         r = client.get("/api/digest?window=24h")
         assert r.status_code == 200
         body = r.json()
-        assert body["count"] == body["total"] == 1
+        assert body["count"] == body["total"] == 2
         assert body["counts"]["high"] == 1
         assert body["undated_portfolio_announcements"] == 1
         assert body["items"][0]["subject"] == "Financial Results"
-        week = client.get("/api/digest?window=7d").json()
-        assert week["count"] == 1
         month = client.get("/api/digest?window=30d").json()
-        assert month["count"] == 2
+        ordered = [(item["materiality"], item["subject"]) for item in month["items"]]
+        assert ordered == [("high", "Financial Results"), ("high", "Material litigation disclosed"), ("medium", "Capacity addition commissioning update"), ("routine", "Shareholding Pattern")]
+        week = client.get("/api/digest?window=7d").json()
+        assert week["count"] == 3
+        assert month["count"] == 4
         custom = client.get("/api/digest?from_date=2026-11-01&to_date=2026-11-09").json()
-        assert custom["count"] == 2
+        assert custom["count"] == 4
         assert custom["timezone"] == "Asia/Kolkata"
         invalid = client.get("/api/digest?from_date=2026-11-10&to_date=2026-11-09")
         assert invalid.status_code == 422

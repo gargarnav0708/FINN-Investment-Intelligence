@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 import re
 import logging
 import os
@@ -18,8 +17,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .database import Base, DATABASE_IDENTIFIER, PROJECT_ROOT, SessionLocal, engine, get_db, upgrade_schema
-from .models import (AlertEvent, AlertPreference, Announcement, Company, DailyMarketData, DocumentExtractionRun, DocumentPage,
-                     FinancialObservation, IngestionRun, PortfolioHolding, SourceDocument, ManagementStatement, CommitmentAssessment,
+from .models import (AlertEvent, Announcement, Company, DailyMarketData, DocumentExtractionRun, DocumentPage,
+                     FinancialObservation, IngestionRun, PortfolioHolding, SourceDocument, ManagementStatement,
                      ProviderFinancialObservation, ResearchDatasetSnapshot)
 from .research import PARSER_VERSION, calculate_comparison, registered_pdf_path, sha256_file
 from .intelligence import (ALERT_CATEGORIES, alert_event_payload, alert_preferences_payload,
@@ -36,7 +35,7 @@ from .thesis_monitor import build_thesis_drift
 logger = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_: FastAPI):
     logger.info("FINN starting; database=%s", DATABASE_IDENTIFIER)
     Base.metadata.create_all(bind=engine)
     upgrade_schema(engine)
@@ -190,7 +189,7 @@ def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
         cached = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "profile"))
         profile = (cached.details or {}) if cached and cached.status in {"available", "partially_available"} else {}
         if profile.get("business"):
-            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
+            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached and cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
         return {"ticker": company.ticker, "status": "unavailable", "message": "No indexed official profile is available. Provider profile coverage will be checked on demand.", "facts": [], "segments": []}
     document = docs[0]
     pages = {p.page_number: p for p in db.scalars(select(DocumentPage).where(DocumentPage.document_id == document.id, DocumentPage.page_number.in_([5, 6, 7]))).all()}
@@ -211,7 +210,7 @@ def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
         cached = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "profile"))
         profile = (cached.details or {}) if cached and cached.status in {"available", "partially_available"} else {}
         if profile.get("business"):
-            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
+            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached and cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
     return {"ticker": company.ticker, "status": "available" if facts else "unavailable", "message": None if facts else "The annual report is indexed, but a business profile passage was not extracted.", "facts": facts, "segments": segments, "document_id": document.id, "document_title": document.title}
 
 
@@ -249,11 +248,15 @@ def research_coverage(ticker: str, db: Session = Depends(get_db)) -> dict:
         return run.status if run else ("not_connected" if provider else "not_configured")
     market_count = db.scalar(select(func.count(DailyMarketData.id)).where(DailyMarketData.company_id == company.id)) or 0
     ann_count = db.scalar(select(func.count(Announcement.id)).where(Announcement.company_id == company.id)) or 0
-    snapshots = {item.dataset: item for item in db.scalars(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id)).all()}
+    snapshots: dict[str, ResearchDatasetSnapshot] = {
+        item.dataset: item
+        for item in db.scalars(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id)).all()
+    }
     market = "available" if market_count else ("provider_error" if snapshots.get("market") and snapshots["market"].status == "provider_error" else "not_connected")
     announcements = "available" if ann_count else (snapshots["announcements"].status if snapshots.get("announcements") else ("provider_error" if provider_status("nse_announcements") == "failed" else "not_connected"))
     profile_result = company_profile(company.ticker, db)
-    profile = {"available": "available", "provider_available": "partially_available"}.get(profile_result.get("status"))
+    profile_status = profile_result.get("status")
+    profile = {"available": "available", "provider_available": "partially_available"}.get(profile_status) if isinstance(profile_status, str) else None
     if profile is None:
         profile = "provider_error" if snapshots.get("profile") and snapshots["profile"].status == "provider_error" else "indexed_not_extracted" if annual and any(pages_by_doc.get(d.id, 0) for d in annual) else "not_connected" if provider_configured else "not_configured"
     valid_mgmt = db.scalar(select(func.count(ManagementStatement.id)).where(ManagementStatement.company_id == company.id, ManagementStatement.review_status == "approved")) or 0
@@ -474,34 +477,39 @@ def _results_context(db: Session, item: Announcement, assessment: dict) -> dict 
     if assessment["category"] != "results" or item.announcement_datetime is None:
         return None
     announcement_day = item.announcement_datetime.date()
-    observations = db.scalars(select(FinancialObservation).where(
-        FinancialObservation.company_id == item.company_id,
-        FinancialObservation.statement_basis == "consolidated",
-        FinancialObservation.period_type == "quarterly",
-        FinancialObservation.canonical_metric.in_(["revenue", "pbt", "pat"]),
-        FinancialObservation.extraction_status == "validated",
-        FinancialObservation.period_end <= announcement_day,
-    ).order_by(FinancialObservation.period_end.desc(), FinancialObservation.id.desc())).all()
+    company = db.get(Company, item.company_id)
+    if company is None:
+        return {"status": "extraction_unavailable", "message": "Company record is unavailable for the results context."}
+    observations = [
+        row
+        for metric in ("revenue", "ebitda", "pbt", "pat")
+        for row in _financial_rows(db, company, metric, "consolidated", "quarterly")
+        if row.extraction_status == "validated" and row.period_end <= announcement_day
+    ]
     ends = sorted({o.period_end for o in observations if (announcement_day - o.period_end).days <= 90}, reverse=True)
     if not ends:
         return {"status": "extraction_unavailable", "message": "Results filing detected. Financial extraction is not yet available."}
     period_end = ends[0]
-    company = db.get(Company, item.company_id)
     values = {}
-    for metric in ("revenue", "pbt", "pat"):
+    for metric in ("revenue", "ebitda", "pbt", "pat"):
         row = next((o for o in observations if o.period_end == period_end and o.canonical_metric == metric), None)
         if row is None:
             continue
+        document = db.get(SourceDocument, row.document_id)
         values[metric] = {
             "value_in_crore": float(row.normalised_value_in_crore),
+            "reported_value_raw": row.reported_value_raw, "reported_unit": row.reported_unit,
             "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter,
             "period_end": row.period_end.isoformat(), "observation_id": row.id,
             "page_number": row.page_number, "document_id": row.document_id,
+            "document_title": document.title if document else None,
+            "source_url": f"/api/documents/{row.document_id}/file#page={row.page_number}",
             "evidence_url": f"/api/financial-observations/{row.id}",
             "qoq": _quarter_comparison(db, row, company, 0),
             "yoy": _quarter_comparison(db, row, company, 1),
         }
-    return {"status": "available" if values else "extraction_unavailable", "statement_basis": "consolidated", "unit": "INR crore", "period_end": period_end.isoformat(), "metrics": values, "research_url": f"/#research?ticker={company.ticker}"}
+    period_observation = next((o for o in observations if o.period_end == period_end), None)
+    return {"status": "available" if values else "extraction_unavailable", "statement_basis": "consolidated", "unit": "INR crore", "period_end": period_end.isoformat(), "fiscal_year": period_observation.fiscal_year if period_observation else None, "fiscal_quarter": period_observation.fiscal_quarter if period_observation else None, "metrics": values, "research_url": f"/#research?ticker={company.ticker}"}
 
 
 @app.get("/api/digest")
@@ -536,7 +544,8 @@ def portfolio_digest(
             if priority and assessment["materiality"] != priority: continue
             if category and assessment["category"] != category: continue
             selected.append((stamp, item, assessment))
-    selected.sort(key=lambda x: x[0], reverse=True)
+    priority_rank = {"high": 0, "medium": 1, "routine": 2, "low": 2, "unclassified": 3}
+    selected.sort(key=lambda x: (priority_rank.get(x[2].get("materiality"), 3), -x[0].timestamp()))
     total = len(selected)
     counts = {level: sum(1 for _, _, a in selected if a["materiality"] == level) for level in ("high", "medium", "routine", "unclassified")}
     selected = selected[:limit]
@@ -556,12 +565,17 @@ def portfolio_digest(
 
 @app.get("/api/alerts/settings")
 def read_alert_settings(db: Session = Depends(get_db)) -> dict:
-    return alert_preferences_payload(get_alert_preferences(db))
+    prefs = get_alert_preferences(db)
+    if prefs is None:
+        raise HTTPException(status_code=500, detail="Alert preferences are unavailable.")
+    return alert_preferences_payload(prefs)
 
 
 @app.patch("/api/alerts/settings")
 def update_alert_settings(payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
     prefs = get_alert_preferences(db)
+    if prefs is None:
+        raise HTTPException(status_code=500, detail="Alert preferences are unavailable.")
     categories = payload.get("announcement_categories", prefs.announcement_categories or {})
     if not isinstance(categories, dict) or any(k not in ALERT_CATEGORIES or not isinstance(v, bool) for k, v in categories.items()):
         raise HTTPException(status_code=422, detail="announcement_categories must map supported category names to booleans")
@@ -711,7 +725,7 @@ def _financial_rows(db: Session, company: Company, metric: str, basis: str, peri
     for row in rows:
         grouped.setdefault(row.period_end, []).append(row)
     selected = []
-    for period_end, items in grouped.items():
+    for items in grouped.values():
         if period_type == "annual":
             primary = [row for row in items if row.fiscal_year == row.document.fiscal_year and row.document.document_type == "annual_report"]
         else:
@@ -741,23 +755,6 @@ def _financial_observation_payload(item: FinancialObservation) -> dict:
     }
 
 
-def _comparison_for(db: Session, current: FinancialObservation, company: Company, metric: str, delta_years: int) -> dict:
-    target_year = current.period_end.year - delta_years
-    try:
-        target_end = current.period_end.replace(year=target_year)
-    except ValueError:
-        target_end = current.period_end.replace(year=target_year, day=28)
-    prior_rows = db.scalars(select(FinancialObservation).where(
-        FinancialObservation.company_id == company.id,
-        FinancialObservation.canonical_metric == metric,
-        FinancialObservation.statement_basis == current.statement_basis,
-        FinancialObservation.period_type == current.period_type,
-        FinancialObservation.period_end == target_end,
-    ).order_by(FinancialObservation.id.desc())).all()
-    prior = next((row for row in prior_rows if row.extraction_status == "validated"), None)
-    return calculate_comparison(current, prior, "qoq" if delta_years == 0 else "yoy") if delta_years else {"status": "unavailable", "reason": "Quarter-over-quarter comparison requires the immediately prior quarter."}
-
-
 def _quarter_comparison(db: Session, current: FinancialObservation, company: Company, years: int) -> dict:
     if years == 0:
         if current.period_type == "annual":
@@ -784,7 +781,15 @@ def _quarter_comparison(db: Session, current: FinancialObservation, company: Com
         FinancialObservation.period_end == target_end,
     ).order_by(FinancialObservation.id.desc())).all()
     prior = next((row for row in prior_rows if row.extraction_status == "validated"), None)
-    return calculate_comparison(current, prior, kind)
+    comparison = calculate_comparison(current, prior, kind)
+    if prior is not None:
+        comparison.update({
+            "previous_value_in_crore": float(prior.normalised_value_in_crore),
+            "previous_period_end": prior.period_end.isoformat(),
+            "previous_fiscal_year": prior.fiscal_year,
+            "previous_fiscal_quarter": prior.fiscal_quarter,
+        })
+    return comparison
 
 
 @app.get("/api/financials/{ticker}/headline", response_model=FinancialHeadlineResponse)
@@ -843,7 +848,6 @@ def financial_history(
     company = _get_company(db, ticker)
     selected = _financial_rows(db, company, metric, statement_basis, period_type)[-periods:]
     data = []
-    all_periods = _financial_rows(db, company, metric, statement_basis, period_type)
     for item in selected:
         peers = [row for row in db.scalars(select(FinancialObservation).where(
             FinancialObservation.company_id == company.id,

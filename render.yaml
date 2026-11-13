@@ -1,0 +1,18 @@
+# Render Blueprint: New > Blueprint > pick this repo. Then set FINN_LLM_API_KEY in the dashboard.
+services:
+  - type: web
+    name: finn
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: FINN_LLM_API_KEY
+        sync: false            # paste your Gemini key in the Render dashboard; never commit it
+      - key: FINN_LLM_FAST_MODEL
+        value: gemini-2.5-flash-lite
+      - key: FINN_LLM_STRONG_MODEL
+        value: gemini-2.5-flash
+      - key: APP_ENV
+        value: production

@@ -64,13 +64,13 @@ def test_retrieval_llm_citations_are_checked_against_selected_company_pages(monk
         FakeResponse.document_id=doc.id
         FakeResponse.citation_quote="We expect steady growth this year."
         monkeypatch.setenv("FINN_LLM_BASE_URL","https://llm.example/v1");monkeypatch.setenv("FINN_LLM_MODEL","test-model");monkeypatch.setenv("FINN_LLM_API_KEY","test-key")
-        monkeypatch.setattr("backend.app.llm_research.urlopen",lambda request,timeout:FakeResponse())
+        monkeypatch.setattr("backend.app.llm._post",lambda config,messages,max_tokens,timeout:(json.loads(json.loads(FakeResponse().read(0))["choices"][0]["message"]["content"]),{}))
         result=answer_with_provider(db,company,"What growth outlook did management discuss?")
         assert result["status"]=="available"
         assert result["citations"][0]["page"]==4
         assert result["citations"][0]["url"]==f"/api/documents/{doc.id}/file#page=4"
         FakeResponse.citation_quote="The company will double profits next quarter."
-        fabricated=answer_with_provider(db,company,"What growth outlook did management discuss?")
+        fabricated=answer_with_provider(db,company,"What growth outlook did management discuss this year?")
         assert fabricated["status"]=="abstained"
         assert not fabricated["citations"]
     engine.dispose()

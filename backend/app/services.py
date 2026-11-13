@@ -118,6 +118,8 @@ def refresh_company_research(db: Session, company: Company, ttl_hours: int = 24)
             ))
             if existing is None:
                 db.add(ProviderFinancialObservation(company_id=company.id, fetched_at=now, **item))
+            elif existing.provider == "screener.in":
+                continue  # filing-derived screener tables take precedence over Yahoo's provider feed
             else:
                 for key, value in item.items():
                     setattr(existing, key, value)
@@ -233,7 +235,7 @@ def _write_announcement_cache(ticker: str, start: date, end: date, payload: list
     (path / f"{ticker}_{start:%Y%m%d}_{end:%Y%m%d}.json").write_text(json.dumps(payload, ensure_ascii=False, default=str))
 
 
-def _register_exchange_documents(db: Session, company: Company, announcements: list[dict]) -> dict:
+def _register_exchange_documents(db: Session, company: Company, announcements: list[dict], force_type: str | None = None) -> dict:
     """Register primary PDFs linked from NSE filing notices, without crawling external sites."""
     root = DATA_DIR / "documents" / re.sub(r"[^A-Z0-9_-]", "_", company.ticker.upper())
     root.mkdir(parents=True, exist_ok=True)
@@ -242,7 +244,9 @@ def _register_exchange_documents(db: Session, company: Company, announcements: l
     for item in announcements:
         subject = f"{item.get('subject', '')} {item.get('details', '')}"
         lowered = subject.lower()
-        if "annual report" in lowered:
+        if force_type:
+            document_type = force_type
+        elif "annual report" in lowered:
             document_type = "annual_report"
         elif re.search(r"earnings?\s*call|concall|conference call.*transcript", lowered):
             document_type = "earnings_call_transcript"
@@ -271,7 +275,7 @@ def _register_exchange_documents(db: Session, company: Company, announcements: l
         file_hash = None
         status = "discovered"
         try:
-            response = requests.get(url, timeout=25, headers={"User-Agent": "FINN research client/1.0"})
+            response = requests.get(url, timeout=40, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Accept": "application/pdf,*/*", "Referer": "https://www.nseindia.com/"})
             response.raise_for_status()
             content = response.content
             if len(content) > 30_000_000 or not content.startswith(b"%PDF"):
@@ -393,8 +397,10 @@ def sync_all(db: Session, lookback_days: int = 30, download_docs: bool = True, m
     market = sync_market(db, months=market_months)
     announcements = sync_announcements(db, lookback_days=lookback_days)
     documents = discover_documents(db, "TATAPOWER", download=download_docs)
+    from .pipeline import process_portfolio_results
+    results = process_portfolio_results(db, days=max(3, min(lookback_days, 10)))
     alerts = evaluate_alerts(db) if market.get("status") in {"success", "partial"} or announcements.get("status") in {"success", "partial"} else {"status":"skipped","created":0}
-    return {"market": market, "announcements": announcements, "documents": documents, "alerts": alerts}
+    return {"market": market, "announcements": announcements, "documents": documents, "results": results, "alerts": alerts}
 
 
 def research_company(db: Session, ticker: str, months: int = 6, announcement_days: int = 30) -> dict:

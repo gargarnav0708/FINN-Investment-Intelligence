@@ -315,3 +315,56 @@ class CommitmentAssessment(Base):
     assessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     statement: Mapped[ManagementStatement] = relationship()
     financial_observation: Mapped[FinancialObservation | None] = relationship()
+
+
+class LLMCall(Base):
+    """Response cache and usage ledger for every model call (keyed by prompt + input hash)."""
+    __tablename__ = "llm_calls"
+    __table_args__ = (UniqueConstraint("cache_key", name="uq_llm_call_cache_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    tier: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    response_json: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_hits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResultsExtraction(Base):
+    """Headline numbers machine-read from one quarterly-results filing, with the checks they passed."""
+    __tablename__ = "results_extractions"
+    __table_args__ = (UniqueConstraint("document_id", name="uq_results_extraction_document"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("source_documents.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)  # verified | unverified | failed
+    statement_basis: Mapped[str | None] = mapped_column(String(20))
+    reported_unit: Mapped[str | None] = mapped_column(String(32))
+    period_end: Mapped[date | None] = mapped_column(Date)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    checks: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(80))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    document: Mapped[SourceDocument] = relationship()
+
+
+class NarrativeAssessment(Base):
+    """Company-level 'promised vs delivered' synthesis from the reasoning model."""
+    __tablename__ = "narrative_assessments"
+    __table_args__ = (UniqueConstraint("company_id", name="uq_narrative_assessment_company"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(80))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

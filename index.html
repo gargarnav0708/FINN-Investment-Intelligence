@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1115" />
     <title>FINN — Investment intelligence</title>
-    <link rel="stylesheet" href="./styles.css?v=research-tabs-1" />
+    <link rel="stylesheet" href="./styles.css?v=narrative-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -76,6 +76,7 @@
           <div class="company-hero"><div class="company-identity"><div class="company-monogram">TP</div><div><div class="company-title-row"><h2 id="companyName">Tata Power Company</h2><span class="exchange-badge">NSE</span></div><div class="company-subline"><span id="companyTicker">TATAPOWER</span><span class="subline-dot"></span><span id="companySector">Utilities</span><span class="universe-pill" id="companyUniverseLabel">PORTFOLIO</span></div></div></div><div class="company-market"><span class="section-kicker">LATEST PRICE · EOD</span><strong id="companyLatestPrice">— <small>INR</small></strong><span id="companyPriceDate">No market record loaded</span></div><button class="company-more icon-button" aria-label="Company options">···</button></div>
           <nav class="company-tabs" aria-label="Company sections"><button class="selected" data-tab="overview" aria-selected="true">Overview</button><button data-tab="financials" aria-selected="false">Financials</button><button data-tab="commitments" aria-selected="false">Commitments <span class="tab-new">CORE</span></button><button data-tab="documents" aria-selected="false">Documents</button></nav>
           <section class="commitments-view" id="commitmentsView" hidden>
+            <section class="narrative-panel" id="narrativePanel" aria-labelledby="narrativeTitle"><div class="empty-filter">Loading promised vs delivered…</div></section>
             <div class="commitment-summary-strip" id="commitmentSummary"><span>Loading management guidance…</span></div><div id="narrativeNumbersNote" class="narrative-numbers-note"></div>
             <div class="commitment-toolbar"><div><span class="section-kicker">MANAGEMENT ACCOUNTABILITY</span><h2>What was said. What followed.</h2></div><div class="commitment-filters"><select id="commitmentCandidateCategory" aria-label="Prioritise review candidates"><option value="all">All candidate categories</option><option value="financial">Financial guidance first</option><option value="operational">Operational</option><option value="qualitative">Qualitative</option></select><select id="commitmentTypeFilter" aria-label="Filter by statement type"><option value="all">All statement types</option></select><select id="commitmentStatusFilter" aria-label="Filter by assessment status"><option value="all">All statuses</option><option>needs_review</option><option>awaiting_outcome</option><option>in_progress</option><option>not_comparable</option><option>achieved</option><option>missed</option></select><select id="commitmentPeriodFilter" aria-label="Filter by fiscal period"><option value="all">All periods</option></select><select id="commitmentTopicFilter" aria-label="Filter by topic"><option value="all">All topics</option></select></div></div>
             <div class="commitment-review-queue" id="commitmentReviewQueue"></div>
@@ -114,6 +115,6 @@
     </div>
     <div class="toast" id="toast" role="status"></div>
     <dialog id="detailDialog" class="detail-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close details">×</button></form><div id="dialogContent"></div></dialog>
-    <script src="./app.js?v=research-tabs-1"></script>
+    <script src="./app.js?v=narrative-1"></script>
   </body>
 </html>

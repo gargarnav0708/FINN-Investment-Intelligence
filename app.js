@@ -234,3 +234,104 @@ document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLower
 
 if(location.hash==='#commitments'){showView('research');showResearchSection('commitments')}else if(location.hash==='#research')showView('research');
 initializeApp();
+
+/* ---- Narrative vs numbers + any-ticker deep research (generic pipeline) ---- */
+const VERDICT_LABEL={delivered:'Delivered',exceeded:'Exceeded',missed:'Missed',partly:'Partly met',pending:'Too early',not_measurable:'Not measurable',unverified:'Unverified'};
+let narrativeData=null,deepJobTimer=null;
+function fmtCr(v){return v==null?'—':`₹${Number(v).toLocaleString('en-IN',{maximumFractionDigits:0})} Cr`}
+function fmtPct(v){if(v==null)return '—';const n=Number(v);return `${n>0?'+':''}${n.toFixed(1)}%`}
+function sourceHref(url){try{return url?new URL(url,API_BASE_URL).href:null}catch{return null}}
+async function loadNarrative(ticker){
+  const panel=document.getElementById('narrativePanel');if(!panel)return;
+  if(dataMode!=='live'){panel.innerHTML='<div class="empty-filter">Switch to Live Data to see promised vs delivered.</div>';return}
+  try{const data=await apiGet(`/api/research/${encodeURIComponent(ticker)}/narrative`);if(selectedCompany?.ticker!==ticker)return;narrativeData=data;renderNarrative()}
+  catch(e){panel.innerHTML=`<div class="empty-filter">Promised vs delivered unavailable: ${escapeHtml(e.message)}</div>`}
+}
+function renderNarrative(progress=null){
+  const panel=document.getElementById('narrativePanel');if(!panel)return;
+  const d=narrativeData||{calls:[],delivered:{quarterly:[]},llm:{}};
+  const sc=d.scorecard||{};const cred=sc.credibility||'insufficient_evidence';
+  const calls=d.calls||[];const quarters=(d.delivered?.quarterly||[]).slice(-6).reverse();
+  const running=!!deepJobTimer;
+  const llmNote=d.llm&&!d.llm.configured?'<span class="deep-progress">Model key not configured on this server — documents and numbers still load.</span>':'';
+  const action=`<div class="narrative-actions"><button class="deep-button" id="runDeepResearch" ${running?'disabled':''}>${running?'Reading sources…':calls.length?'Refresh from latest filings':'Read last 4 concalls + results'}</button>${progress?`<span class="deep-progress" role="status">${escapeHtml(progress)}</span>`:''}${llmNote}</div>`;
+  const head=`<div class="narrative-head"><div><span class="section-kicker">NARRATIVE VS NUMBERS</span><h2 id="narrativeTitle">Promised vs delivered</h2><p>Guidance pulled verbatim from management on the last four earnings calls, checked against reported numbers from filings. Quotes that are not in the transcript are discarded; verdicts whose numbers don't match the table are marked unverified.</p></div>${action}</div>`;
+  if(!calls.length){panel.innerHTML=head+`<div class="empty-filter">${running?'Fetching transcripts, annual report and results filings for this company…':'No guidance has been read for this company yet. Run it once — results are cached, so it is instant afterwards.'}</div>`+deliveredStrip(quarters);bindDeep();return}
+  const counts=d.counts||{};
+  const countHtml=Object.entries(counts).map(([k,v])=>`<span>${v} ${escapeHtml(VERDICT_LABEL[k]||k)}</span>`).join('');
+  const score=sc.headline?`<div class="scorecard"><span class="cred-chip cred-${escapeHtml(cred)}">${escapeHtml(cred.replaceAll('_',' '))} credibility</span><div><strong>${escapeHtml(sc.headline)}</strong>${sc.pattern?`<small>${escapeHtml(sc.pattern)}</small>`:''}${sc.watch_next?`<small><b>Watch next quarter:</b> ${escapeHtml(sc.watch_next)}</small>`:''}${countHtml?`<div class="verdict-counts" style="margin-top:8px">${countHtml}</div>`:''}</div></div>`:(d.status==='pending_assessment'?'<div class="empty-filter">Guidance extracted; assessment pending.</div>':'');
+  const blocks=calls.map(call=>`<div class="call-block"><h3>${escapeHtml(call.quarter||'Earnings call')}<small>${escapeHtml(call.call_date||'')} · ${call.items.length} statement${call.items.length===1?'':'s'}</small></h3>${call.items.map(promiseCard).join('')}</div>`).join('');
+  panel.innerHTML=head+score+deliveredStrip(quarters)+blocks+`<div class="deep-progress">${d.model?`Assessed by ${escapeHtml(d.model)}`:''}${d.assessed_at?` · ${escapeHtml(formatDateTime?formatDateTime(d.assessed_at):d.assessed_at)}`:''}</div>`;
+  bindDeep();
+}
+function promiseCard(item){
+  const href=sourceHref(item.source_url);
+  const target=item.target_low!=null?`${item.target_low}${item.target_high!=null&&item.target_high!==item.target_low?`–${item.target_high}`:''}${item.unit==='%'?'%':item.unit?` ${item.unit}`:''}`:'';
+  const v=item.verdict;
+  return `<article class="promise"><div class="promise-said"><blockquote>“${escapeHtml(item.quote)}”</blockquote><div class="promise-meta"><span>${escapeHtml(item.speaker||'Management')}${item.designation?`, ${escapeHtml(item.designation)}`:''}</span>${target?`<span>Target ${escapeHtml(target)}${item.target_period?` · ${escapeHtml(item.target_period)}`:''}</span>`:item.target_period?`<span>${escapeHtml(item.target_period)}</span>`:''}${href?`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">p.${item.page} ↗</a>`:''}</div></div><div class="promise-did">${v?`<span class="verdict verdict-${escapeHtml(v)}">${escapeHtml(VERDICT_LABEL[v]||v)}</span>`:'<span class="verdict">Not assessed</span>'}${item.actual?`<p>${escapeHtml(item.actual)}</p>`:''}${item.explanation?`<p style="color:var(--muted)">${escapeHtml(item.explanation)}</p>`:''}</div></article>`;
+}
+function deliveredStrip(rows){
+  if(!rows.length)return '';
+  const cls=v=>v==null?'':Number(v)>=0?'up':'down';
+  return `<div><span class="section-kicker">DELIVERED · QUARTERLY</span><div class="delivered-strip" style="margin-top:6px">${rows.map(r=>`<div class="delivered-cell"><b>${escapeHtml(r.period)}</b><span>Rev ${fmtCr(r.revenue)} <i class="${cls(r.revenue_growth_pct)}">${fmtPct(r.revenue_growth_pct)}</i></span><span>EBITDA m ${r.ebitda_margin_pct!=null?Number(r.ebitda_margin_pct).toFixed(1)+'%':'—'}</span><span>PAT ${fmtCr(r.pat)} <i class="${cls(r.pat_growth_pct)}">${fmtPct(r.pat_growth_pct)}</i></span><span style="font-size:9px;color:var(--subtle)">${escapeHtml(r.source||'')}</span></div>`).join('')}</div></div>`;
+}
+function bindDeep(){const b=document.getElementById('runDeepResearch');if(b)b.onclick=()=>startDeepResearch(selectedCompany?.ticker)}
+async function startDeepResearch(ticker){
+  if(!ticker)return;
+  try{
+    const job=await apiGet(`/api/research/${encodeURIComponent(ticker)}/deep`,{method:'POST'});
+    clearInterval(deepJobTimer);
+    deepJobTimer=setInterval(async()=>{
+      try{
+        const s=await apiGet(`/api/research-jobs/${job.job_id}`);
+        const c=s.details?.current||{};
+        const label=c.step?`${c.stage}: ${c.step}${c.total?` (${(c.done??0)+1}/${c.total})`:''}`:(c.stage||s.status);
+        if(s.status!=='running'){clearInterval(deepJobTimer);deepJobTimer=null;toast(s.status==='success'?`${ticker}: research updated`:`${ticker}: research finished with issues`);
+          if(selectedCompany?.ticker===ticker){await loadNarrative(ticker);if(typeof loadManagement==='function')loadManagement(ticker);if(typeof loadCompanyFinancials==='function')loadCompanyFinancials(ticker);if(typeof loadResearchCoverage==='function')loadResearchCoverage(ticker)}}
+        else if(selectedCompany?.ticker===ticker)renderNarrative(label);
+      }catch(e){clearInterval(deepJobTimer);deepJobTimer=null;renderNarrative(`Status unavailable: ${e.message}`)}
+    },2500);
+    renderNarrative(job.already_running?'Already running…':'Started…');
+  }catch(e){toast(`Could not start research: ${e.message}`)}
+}
+{
+  const originalLoadManagement=loadManagement;
+  loadManagement=async function(ticker){narrativeData=null;loadNarrative(ticker);return originalLoadManagement(ticker)};
+  const originalRenderResults=renderResultsContext;
+  renderResultsContext=function(result,ticker){
+    let html=originalRenderResults(result,ticker);
+    if(!result||result.status!=='available'||!result.verification)return html;
+    const failed=(result.checks||[]).filter(c=>!c.passed);
+    const badge=result.verification==='verified'
+      ?`<span class="result-verification verified" title="${escapeHtml((result.checks||[]).map(c=>c.detail).join(' | '))}">Auto-verified · ${result.checks?.length||0} checks</span>`
+      :`<span class="result-verification unverified">Unverified</span>`;
+    html=html.replace('<span>Validated filing values</span>',badge);
+    if(failed.length)html=html.replace('<div class="result-metrics-grid">',`<div class="result-checks">${failed.map(c=>escapeHtml(c.detail)).join(' · ')}</div><div class="result-metrics-grid">`);
+    return html;
+  };
+}
+
+/* ---- Company loaders referenced by renderCompany (previously undefined, which broke Live mode) ---- */
+async function loadCompanyProfile(ticker){
+  const desc=document.getElementById('businessDescription'),tags=document.getElementById('segmentTags'),label=document.querySelector('.illustrative-inline'),caption=document.querySelector('.segment-caption');
+  try{
+    const p=await apiGet(`/api/company-profile/${encodeURIComponent(ticker)}`);if(selectedCompany?.ticker!==ticker)return;
+    const fact=(p.facts||[])[0];
+    if(fact?.text){desc.textContent=fact.text;if(label)label.textContent=fact.page_number?`${fact.document_title||'Annual report'} · p.${fact.page_number}`:(p.message||fact.provider||'Provider description')}
+    else{desc.textContent=p.message||'No business description is indexed for this company yet.';if(label)label.textContent='Profile unavailable'}
+    if(tags)tags.innerHTML=(p.segments||[]).map(s=>`<span>${escapeHtml(s.name)}</span>`).join('')||'<span>Segments not yet extracted</span>';
+    if(caption)caption.textContent=(p.segments||[]).length?'Segments named in the annual report.':'Revenue mix will appear when segment data is extracted from the annual report.';
+  }catch(e){if(selectedCompany?.ticker===ticker){desc.textContent='Company profile unavailable.';if(label)label.textContent=e.message}}
+}
+async function loadCompanyDocuments(ticker){
+  try{const d=await apiGet(`/api/documents?ticker=${encodeURIComponent(ticker)}`);if(selectedCompany?.ticker!==ticker)return;sourceDocuments=d.items||[];renderDocuments()}
+  catch(e){if(selectedCompany?.ticker===ticker){sourceDocuments=[];renderDocuments()}}
+}
+async function loadCompanyMarket(ticker){
+  const price=document.getElementById('companyLatestPrice'),date=document.getElementById('companyPriceDate');
+  try{const m=await apiGet(`/api/market/${encodeURIComponent(ticker)}/summary`);if(selectedCompany?.ticker!==ticker)return;
+    if(m.status!=='available'){price.innerHTML='— <small>INR</small>';date.textContent=m.message||'No market record loaded';return}
+    price.innerHTML=`${Number(m.latest_close).toLocaleString('en-IN',{maximumFractionDigits:2})} <small>INR</small>`;
+    date.textContent=`${m.latest_trading_date}${m.daily_return_pct!=null?` · ${fmtPct(m.daily_return_pct)}`:''}${m.relative_volume!=null?` · ${Number(m.relative_volume).toFixed(1)}× vol`:''}`;
+  }catch(e){if(selectedCompany?.ticker===ticker)date.textContent='Market data unavailable'}
+}

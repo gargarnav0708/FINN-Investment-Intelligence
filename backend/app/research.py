@@ -584,9 +584,17 @@ def parse_documents(db: Session, ticker: str | None = None, force: bool = False)
                 for index, page in enumerate(pdf):
                     page_number = index + 1
                     content = page.get_text("text", sort=True).strip()
+                    # Table detection is slow; run it only where statements live (results filings and
+                    # the financial-statement pages of annual reports), never on transcripts.
+                    lowered = content[:3000].lower()
+                    wants_tables = document.document_type == "quarterly_results" or (
+                        document.document_type == "annual_report" and any(k in lowered for k in ("statement of profit", "balance sheet", "cash flow")))
                     try:
-                        with redirect_stdout(io.StringIO()):
-                            table_count = len(page.find_tables().tables)
+                        if wants_tables:
+                            with redirect_stdout(io.StringIO()):
+                                table_count = len(page.find_tables().tables)
+                        else:
+                            table_count = 0
                     except Exception:
                         table_count = 0
                     tables_total += table_count

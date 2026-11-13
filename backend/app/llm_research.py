@@ -37,25 +37,17 @@ def retrieve_pages(db: Session, company: Company, question: str, limit: int = 6)
 
 
 def answer_with_provider(db: Session, company: Company, question: str) -> dict | None:
-    base, model, key = _config()
-    if not (base and model):
+    from . import llm
+    if not llm.is_configured():
         return None
     pages=retrieve_pages(db,company,question)
     if not pages:
         return {"status":"abstained","answer":"No matching indexed primary-source pages were retrieved for this question.","citations":[],"formula":None,"mode":"retrieval_llm"}
     evidence="\n\n".join(f"SOURCE document_id={p['document_id']} title={p['title']} page={p['page']}\n{p['text']}" for p in pages)
-    payload={"model":model,"temperature":0,"response_format":{"type":"json_object"},"messages":[
-        {"role":"system","content":"Answer only from the supplied primary-source excerpts. Return JSON with keys answer and citations. citations must be an array of objects with document_id, page, and quote copied exactly from that page. If evidence is insufficient, say so and return citations []. Do not make recommendations or add outside facts."},
-        {"role":"user","content":f"Question: {question}\n\nRetrieved evidence:\n{evidence}"},
-    ]}
-    headers={"Content-Type":"application/json"}
-    if key: headers["Authorization"]=f"Bearer {key}"
-    request=Request(f"{base}/chat/completions",data=json.dumps(payload).encode(),headers=headers,method="POST")
     try:
-        with urlopen(request,timeout=20) as response:
-            result=json.loads(response.read(1_000_000))
-        content=result["choices"][0]["message"]["content"]
-        parsed=json.loads(content) if isinstance(content,str) else content
+        parsed,_meta=llm.complete_json(db,tier="fast",purpose="research_qa",prompt_version="qa-v1",max_tokens=1500,
+            system="Answer only from the supplied primary-source excerpts. Return JSON with keys answer and citations. citations must be an array of objects with document_id, page, and quote copied exactly from that page. If evidence is insufficient, say so and return citations []. Do not make recommendations or add outside facts.",
+            user=f"Question: {question}\n\nRetrieved evidence:\n{evidence}")
     except Exception:
         return {"status":"unavailable","answer":"The configured research model could not return a usable evidence-grounded response.","citations":[],"formula":None,"mode":"retrieval_llm"}
     allowed={(p["document_id"],p["page"]):p for p in pages}

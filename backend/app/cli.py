@@ -75,6 +75,18 @@ def main(argv: list[str] | None = None) -> int:
     mgmt_review.add_argument("--reviewer", required=True)
     mgmt_review.add_argument("--action", choices=["approved", "rejected", "needs_review"], required=True)
     mgmt_review.add_argument("--note", default="")
+    deep_cmd = commands.add_parser("deep-research", help="Primary-source research for any NSE ticker: screener.in documents, results, guidance, promised-vs-delivered")
+    deep_cmd.add_argument("tickers", nargs="+")
+    deep_cmd.add_argument("--force", action="store_true", help="Re-run the narrative assessment even if inputs are unchanged")
+    results_cmd = commands.add_parser("process-results", help="Download and machine-read recent results filings")
+    results_cmd.add_argument("--ticker", help="One ticker (default: whole portfolio)")
+    results_cmd.add_argument("--days", type=int, default=120)
+    demo_cmd = commands.add_parser("bootstrap-demo", help="Build the deployable demo database: portfolio data, results and deep research for demo tickers")
+    demo_cmd.add_argument("--research", nargs="*", default=["TATAPOWER", "INFY", "TITAN", "ASIANPAINT", "DIXON"], help="Tickers to run deep research on")
+    demo_cmd.add_argument("--days", type=int, default=30)
+    commands.add_parser("llm-usage", help="Print model call, cache-hit and token counts")
+    snap_cmd = commands.add_parser("snapshot", help="Write a compressed copy of the database for deployment (snapshot/finn.db.gz)")
+    snap_cmd.add_argument("--include-pdfs", action="store_true", help="Also copy downloaded PDFs (larger image)")
     mgmt_assess = commands.add_parser("assess-commitments", help="Assess approved guidance against comparable validated outcomes")
     mgmt_assess.add_argument("--ticker", default="TATAPOWER")
     args = parser.parse_args(argv)
@@ -112,6 +124,35 @@ def main(argv: list[str] | None = None) -> int:
             item.review_status = args.action; item.reviewer = args.reviewer; item.reviewed_at = datetime.now(timezone.utc); item.review_note = args.note or None
             db.commit()
             result = {"id": item.id, "ticker": item.company.ticker, "review_status": item.review_status, "reviewer": item.reviewer, "reviewed_at": item.reviewed_at.isoformat()}
+        elif args.command == "deep-research":
+            from .pipeline import deep_research
+            result = {}
+            for ticker in args.tickers:
+                result[ticker.upper()] = deep_research(db, ticker, progress=lambda stage, detail: print(f"[{stage}] {detail.get('ticker','')} {detail.get('step','')}", file=sys.stderr), force_assessment=args.force)
+        elif args.command == "process-results":
+            from .pipeline import process_portfolio_results, process_results
+            if args.ticker:
+                company = db.scalar(select(Company).where(Company.ticker == args.ticker.upper()))
+                result = process_results(db, company, days=args.days) if company else {"status": "failed", "error": "Unknown ticker"}
+            else:
+                result = process_portfolio_results(db, days=args.days)
+        elif args.command == "bootstrap-demo":
+            from .pipeline import deep_research
+            seed_companies(db)
+            result = {"sync": sync_all(db, lookback_days=args.days, download_docs=True, market_months=6), "research": {}}
+            for ticker in args.research:
+                try:
+                    result["research"][ticker] = deep_research(db, ticker, progress=lambda stage, detail: print(f"[{stage}] {detail.get('ticker','')} {detail.get('step','')}", file=sys.stderr))
+                except Exception as exc:
+                    db.rollback()
+                    result["research"][ticker] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            result["alerts"] = evaluate_alerts(db)
+        elif args.command == "llm-usage":
+            from .llm import usage_summary
+            result = usage_summary(db)
+        elif args.command == "snapshot":
+            from .snapshot import write_snapshot
+            result = write_snapshot(include_pdfs=args.include_pdfs)
         elif args.command == "assess-commitments":
             result = assess_commitments(db, args.ticker)
         elif args.command == "bootstrap":

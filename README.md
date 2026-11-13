@@ -92,7 +92,46 @@ Review individual candidates in the app or use the CLI review commands. Only mar
 
 Copy `.env.example` to `.env` to customize local settings. By default, FINN uses SQLite at `data/finn.db`; set `DATABASE_URL` to use another SQLAlchemy-compatible database. CORS is disabled unless you set `FINN_CORS_ORIGINS` to the exact origins of a separately hosted frontend.
 
-An optional OpenAI-compatible chat-completions provider can be configured with `FINN_LLM_BASE_URL`, `FINN_LLM_MODEL`, and `FINN_LLM_API_KEY`. Leave these unset to keep model-backed retrieval disabled. Do not commit `.env` or API keys.
+Model features (results reading, guidance extraction, promised-vs-delivered, research Q&A) need `FINN_LLM_API_KEY` (a Google Gemini key by default; any OpenAI-compatible endpoint via `FINN_LLM_BASE_URL`). Model choice per tier: `FINN_LLM_FAST_MODEL`, `FINN_LLM_STRONG_MODEL`. Without a key, the app still runs and shows documents and numbers. Do not commit `.env` or API keys.
+
+## Any-ticker research, results reading and promised vs delivered
+
+These run for **any NSE ticker** (not only the demo set), from primary sources:
+
+| Step | Source | Model | Guard rail |
+|---|---|---|---|
+| Documents | screener.in used only as a link directory → the company's own annual report + last 4 concall transcripts (BSE / IR site PDFs) | — | PDFs are hash-verified and page-indexed |
+| Delivered numbers | screener.in standardised quarterly / annual tables (built from exchange filings) | — | Machine-read results filings take precedence |
+| Results headline (Revenue, EBITDA, PBT, PAT; QoQ & YoY) | NSE results filing PDF (one filing prints current, previous and year-ago quarter columns) | fast (Flash-Lite), page image + text | Every number must appear on the cited page; PBT − tax ≈ PAT in every column; column dates 3 and 12 months apart. Pass → auto-verified. Fail → shown as **unverified**, never hidden. |
+| Guidance | Last 4 concall transcripts, full text with page markers | fast, one call per transcript | Quotes must be verbatim on the cited page (or are re-paged / dropped). Speakers are identified from the transcript; nothing is hard-coded per company. |
+| Promised vs delivered | Grounded guidance + delivered table only | strong (Flash), one call per company | Every number the model cites is checked against the table; mismatches downgrade the verdict to *unverified*. |
+
+Model calls go through `backend/app/llm.py`: two tiers, client-side rate pacing, retry on 429, automatic fallback from the strong to the fast tier when the free quota runs out, and a persistent cache keyed by model + prompt version + input hash (a filing or transcript is read once, ever). `GET /api/llm/usage` (or `python -m backend.app.cli llm-usage`) shows calls, cache hits and tokens by purpose.
+
+In the app: **Research → pick or search any company → Commitments → "Read last 4 concalls + results"**. The job runs in the background (`POST /api/research/{ticker}/deep`, poll `GET /api/research-jobs/{id}`). Results filings in the portfolio digest are machine-read during **Refresh**.
+
+CLI equivalents:
+
+```sh
+python -m backend.app.cli deep-research DIXON TITAN       # any NSE tickers
+python -m backend.app.cli process-results --days 10       # read recent results filings across the portfolio
+```
+
+## Deploy (Render)
+
+NSE often blocks cloud IP ranges, so the deployment ships a pre-built database and works even if live scraping fails from the host.
+
+1. Put your Gemini key in `.env` (`FINN_LLM_API_KEY=...`; free key from Google AI Studio).
+2. Build the demo database on your own machine (Indian IP, so NSE works), then snapshot it:
+   ```sh
+   python -m backend.app.cli bootstrap-demo --research TATAPOWER INFY TITAN ASIANPAINT DIXON
+   python -m backend.app.cli snapshot          # writes snapshot/finn.db.gz (commit this file)
+   ```
+3. Commit `snapshot/finn.db.gz` and push.
+4. On render.com: **New → Blueprint →** select the repo (uses `render.yaml` + `Dockerfile`). In the service's **Environment** tab set `FINN_LLM_API_KEY`.
+5. On first boot the app restores `snapshot/finn.db.gz` into `data/finn.db`. Source links whose PDF is not in the image redirect to the original public filing.
+
+The free Render plan sleeps after inactivity and has an ephemeral disk: anything fetched on the server after boot is lost on restart, and the app falls back to the snapshot.
 
 ## Development
 

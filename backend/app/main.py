@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -31,12 +31,20 @@ from .seed import seed_companies
 from .management import assess_commitments, list_statements, statement_payload
 from .research_assistant import answer_question
 from .thesis_monitor import build_thesis_drift
+from . import llm
+from .guidance import assess_narrative, narrative_payload
+from .pipeline import deep_research, latest_results_record, process_portfolio_results
+from .results_extraction import headline_payload, results_context_for_announcement
 
 logger = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("FINN starting; database=%s", DATABASE_IDENTIFIER)
+    from .snapshot import restore_snapshot_if_needed
+    restored = restore_snapshot_if_needed()
+    if restored:
+        logger.info("FINN restored demo snapshot: %s", restored)
     Base.metadata.create_all(bind=engine)
     upgrade_schema(engine)
     with SessionLocal() as db:
@@ -185,6 +193,11 @@ def assess_company_commitments(ticker: str, db: Session = Depends(get_db)) -> di
 def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
     company = _get_company(db, ticker)
     docs = db.scalars(select(SourceDocument).where(SourceDocument.company_id == company.id, SourceDocument.document_type == "annual_report").order_by(SourceDocument.fiscal_year.desc())).all()
+    screener_snapshot = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "screener"))
+    screener_about = (screener_snapshot.details or {}).get("about") if screener_snapshot else None
+    if company.ticker != "TATAPOWER" and screener_about:
+        # Generic issuers: the Tata Power page heuristics below do not apply.
+        return {"ticker": company.ticker, "status": "provider_available", "message": "Company description listed on screener.in", "facts": [{"text": screener_about, "provider": "screener.in"}], "segments": [], "provider": "screener.in"}
     if not docs:
         cached = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "profile"))
         profile = (cached.details or {}) if cached and cached.status in {"available", "partially_available"} else {}
@@ -341,12 +354,12 @@ def _run_refresh_job(job_id: int) -> None:
             return
         result = {}
         errors = []
-        for name, task in (("market", lambda: sync_market(db)), ("announcements", lambda: sync_announcements(db, lookback_days=30)), ("documents", lambda: discover_documents(db, "TATAPOWER", download=True))):
+        for name, task in (("market", lambda: sync_market(db)), ("announcements", lambda: sync_announcements(db, lookback_days=30)), ("documents", lambda: discover_documents(db, "TATAPOWER", download=True)), ("results", lambda: process_portfolio_results(db, days=3))):
             try:
                 result[name] = task()
                 if name in {"market", "announcements"} and result[name].get("status") in {"success", "partial"}:
                     result["alerts"] = evaluate_alerts(db)
-                if result[name].get("status") not in {"success", "ok"}:
+                if result[name].get("status") not in {"success", "ok", "skipped"}:
                     errors.append(f"{name}: {result[name].get('status')} {result[name].get('errors', result[name].get('error_summary', ''))}")
                 job.metadata_json = dict(result)
                 db.commit()
@@ -476,6 +489,10 @@ def announcements(
 def _results_context(db: Session, item: Announcement, assessment: dict) -> dict | None:
     if assessment["category"] != "results" or item.announcement_datetime is None:
         return None
+    machine_read = results_context_for_announcement(db, item)
+    if machine_read is not None:
+        machine_read["research_url"] = f"/#research?ticker={item.company.ticker}"
+        return machine_read
     announcement_day = item.announcement_datetime.date()
     company = db.get(Company, item.company_id)
     if company is None:
@@ -951,6 +968,86 @@ def financial_analysis(
             "derived": derived, "computed_signals": signals}
 
 
+def _run_deep_research_job(job_id: int, ticker: str, force: bool) -> None:
+    with SessionLocal() as db:
+        job = db.get(IngestionRun, job_id)
+        stages: list[dict] = []
+
+        def progress(stage: str, detail: dict) -> None:
+            stages.append({"stage": stage, **detail, "at": datetime.now(timezone.utc).isoformat()})
+            job.metadata_json = {"ticker": ticker, "current": {"stage": stage, **detail}, "stages": stages[-30:]}
+            db.commit()
+
+        try:
+            report = deep_research(db, ticker, progress=progress, force_assessment=force)
+            job.metadata_json = {"ticker": ticker, "current": {"stage": "done"}, "stages": stages[-30:], "report": report}
+            job.status = "success"
+        except Exception as exc:
+            db.rollback()
+            job = db.get(IngestionRun, job_id)
+            job.status = "failed"
+            job.error_summary = f"{type(exc).__name__}: {exc}"[:4000]
+            job.metadata_json = {"ticker": ticker, "current": {"stage": "failed"}, "stages": stages[-30:]}
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+
+
+@app.post("/api/research/{ticker}/deep", status_code=202)
+def start_deep_research(ticker: str, background_tasks: BackgroundTasks, force: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Primary-source research for any NSE ticker: documents, results, guidance and promised-vs-delivered."""
+    ticker = ticker.strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9&-]{0,19}", ticker):
+        raise HTTPException(status_code=422, detail={"code": "invalid_ticker", "message": "Ticker must be an NSE symbol."})
+    provider = f"deep_research:{ticker}"
+    with _refresh_launch_lock:
+        stale_before = datetime.now(timezone.utc) - timedelta(minutes=30)
+        active = db.scalar(select(IngestionRun).where(IngestionRun.provider == provider, IngestionRun.status == "running").order_by(IngestionRun.started_at.desc()).limit(1))
+        if active and (active.started_at.replace(tzinfo=timezone.utc) if active.started_at.tzinfo is None else active.started_at) > stale_before:
+            return {"job_id": active.id, "status": "running", "already_running": True}
+        job = IngestionRun(provider=provider, started_at=datetime.now(timezone.utc), status="running", metadata_json={"ticker": ticker, "current": {"stage": "queued"}})
+        db.add(job); db.commit(); db.refresh(job)
+    background_tasks.add_task(_run_deep_research_job, job.id, ticker, force)
+    return {"job_id": job.id, "status": "running", "already_running": False, "llm": llm.status()}
+
+
+@app.get("/api/research-jobs/{job_id}")
+def deep_research_status(job_id: int, db: Session = Depends(get_db)) -> dict:
+    job = db.get(IngestionRun, job_id)
+    if job is None or not job.provider.startswith("deep_research:"):
+        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "Research job not found"})
+    return {"job_id": job.id, "status": job.status, "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None, "details": job.metadata_json or {}, "error": job.error_summary}
+
+
+@app.get("/api/research/{ticker}/narrative")
+def narrative_vs_numbers(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return narrative_payload(db, _get_company(db, ticker))
+
+
+@app.post("/api/research/{ticker}/narrative/assess")
+def reassess_narrative(ticker: str, force: bool = True, db: Session = Depends(get_db)) -> dict:
+    company = _get_company(db, ticker)
+    try:
+        assess_narrative(db, company, force=force)
+    except llm.LLMUnavailable as exc:
+        raise HTTPException(status_code=503, detail={"code": "llm_unavailable", "message": str(exc)}) from exc
+    return narrative_payload(db, company)
+
+
+@app.get("/api/results/{ticker}/latest")
+def latest_results(ticker: str, db: Session = Depends(get_db)) -> dict:
+    company = _get_company(db, ticker)
+    record = latest_results_record(db, company)
+    if record is None:
+        return {"ticker": company.ticker, "status": "unavailable", "message": "No results filing has been machine-read for this company yet."}
+    return {"ticker": company.ticker, **headline_payload(db, record)}
+
+
+@app.get("/api/llm/usage")
+def llm_usage(db: Session = Depends(get_db)) -> dict:
+    return llm.usage_summary(db)
+
+
 @app.get("/api/research/{ticker}/thesis-drift")
 def thesis_drift(
     ticker: str,
@@ -1039,6 +1136,9 @@ def registered_pdf(document_id: int, db: Session = Depends(get_db)):
         if not path.is_file() or path.stat().st_size == 0 or not document.file_hash or sha256_file(path) != document.file_hash:
             raise ValueError("PDF is missing or does not match its registered hash")
     except (OSError, ValueError) as exc:
+        # Deployed snapshots ship page text but not every PDF: fall back to the original public source.
+        if document.download_url and document.download_url.startswith("https://"):
+            return RedirectResponse(document.download_url, status_code=307)
         raise HTTPException(status_code=404, detail="Verified source PDF is unavailable") from exc
     return FileResponse(path, media_type="application/pdf", filename=path.name, content_disposition_type="inline")
 

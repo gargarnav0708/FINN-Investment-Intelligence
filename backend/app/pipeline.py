@@ -140,7 +140,8 @@ def _results_announcements(db: Session, company: Company, days: int) -> list[Ann
             if stamp < since:
                 continue
         text = f"{item.subject} {item.details or ''}".lower()
-        if classify_announcement(item)["category"] != "results" and "financial result" not in text:
+        from .intelligence import keyword_category
+        if classify_announcement(item)["category"] != "results" and keyword_category(item) != "results" and "financial result" not in text:
             continue
         if any(term in text for term in ("newspaper", "publication", "intimation of board meeting", "prior intimation", "trading window")):
             continue

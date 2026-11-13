@@ -377,3 +377,24 @@ def test_grounding_survives_pdf_line_breaks_and_hyphenation():
     page, _ = guidance._ground("We expect to commission 2.5 GW of renewable capacity this year, and our net debt to EBITDA should remain below 3x", 7, pages)
     assert page == 7  # running page header inside the quote is tolerated
     assert guidance._ground("We will double net profit to 10,000 crore next year", 7, pages) == (None, None)
+
+
+def test_overload_waits_and_retries_the_chain_but_not_on_quota(db, monkeypatch):
+    sleeps, calls = [], []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: sleeps.append(s))
+
+    def busy_then_ok(config, messages, max_tokens, timeout):
+        calls.append(config.model)
+        if len(calls) <= 3:  # whole first round overloaded
+            raise llm.LLMUnavailable("Model provider unavailable after retries (HTTP 503: high demand)")
+        return {"ok": True}, {}
+
+    monkeypatch.setattr(llm, "_post", busy_then_ok)
+    result, meta = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="round")
+    assert result == {"ok": True} and sleeps == [30] and meta["model"] == "gemini-3.5-flash-lite"
+
+    sleeps.clear(); calls.clear()
+    monkeypatch.setattr(llm, "_post", lambda c, m, t, to: (_ for _ in ()).throw(llm.LLMUnavailable("HTTP 429: quota exceeded")))
+    with pytest.raises(llm.LLMUnavailable):
+        llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="quota-only")
+    assert sleeps == []  # exhausted quota is not waited out

@@ -213,7 +213,19 @@ def complete_json(
     errors: list[str] = []
     used = config
     parsed = usage = None
-    for model in (config.model, *config.fallbacks):
+    if tier == "strong":
+        timeout = max(timeout, 240)  # reasoning models think before answering
+    rounds = max(1, int(_env("FINN_LLM_ROUNDS") or 3))
+    chain = [m for r in range(rounds) for m in (config.model, *config.fallbacks)]
+    for attempt_index, model in enumerate(chain):
+        if attempt_index and attempt_index % (1 + len(config.fallbacks)) == 0:
+            # Every model failed this round. Wait out a transient overload (503 / timeouts),
+            # but don't burn time if the only problem is an exhausted daily quota (429).
+            if errors and all("HTTP 429" in e for e in errors[-(1 + len(config.fallbacks)):]):
+                break
+            wait = 30 * (attempt_index // (1 + len(config.fallbacks)))
+            log.warning("all %s models busy for %s; retrying the chain in %ss", tier, purpose, wait)
+            time.sleep(wait)
         used = replace(config, model=model)
         try:
             parsed, usage = _post(used, messages, max_tokens, timeout)
@@ -225,9 +237,10 @@ def complete_json(
             errors.append(f"{model}: {exc}"[:400])
             log.warning("model %s unavailable for %s: %s", model, purpose, str(exc)[:200])
             if "HTTP 4" in str(exc) and "HTTP 429" not in str(exc) and "HTTP 404" not in str(exc):
+                chain = chain[:attempt_index + 1]
                 break  # a request error will not be fixed by another model
     if parsed is None:
-        reason = " | ".join(errors)
+        reason = " | ".join(errors[-6:])
         if tier == "strong" and fallback_to_fast and tier_config("fast") and tier_config("fast").model != config.model:
             # Free-tier quotas on the reasoning model are small; degrade rather than fail the workflow.
             _record(db, key, purpose, config, prompt_version, "error", None, reason, {}, started)

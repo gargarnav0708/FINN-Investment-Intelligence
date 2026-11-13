@@ -26,7 +26,8 @@ DATABASE_IDENTIFIER = (
     if _database_url.drivername.startswith("sqlite") and _database_url.database not in (None, ":memory:")
     else f"{_database_url.drivername}:{_database_url.database or 'memory'}"
 )
-CONNECT_ARGS = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+# timeout: wait up to 30 s for a lock instead of failing at once (CLI jobs run while the web app is open).
+CONNECT_ARGS = {"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {}
 
 
 class Base(DeclarativeBase):
@@ -41,6 +42,7 @@ if DATABASE_URL.startswith("sqlite"):
     def _enable_sqlite_foreign_keys(dbapi_connection, _):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")  # readers no longer block the writer
         cursor.close()
 
 

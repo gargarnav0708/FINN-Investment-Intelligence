@@ -338,3 +338,32 @@ def test_400_drops_optional_parameters_and_retries(db, monkeypatch):
     result, _ = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="retry")
     assert result == {"ok": True}
     assert "reasoning_effort" in seen[0] and "response_format" not in seen[-1]
+
+
+def test_overloaded_model_falls_back_to_next_model(db, monkeypatch):
+    tried = []
+
+    def fake_post(config, messages, max_tokens, timeout):
+        tried.append(config.model)
+        if config.model == "gemini-3.5-flash-lite":
+            raise llm.LLMUnavailable("Model provider unavailable after retries (HTTP 503: high demand)")
+        return {"ok": config.model}, {}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    result, meta = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="busy")
+    assert tried == ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    assert meta["model"] == "gemini-3.1-flash-lite" and result == {"ok": "gemini-3.1-flash-lite"}
+    # cached under the primary key: the retry is free
+    again, meta2 = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="busy")
+    assert meta2["cached"] is True and len(tried) == 2
+
+
+def test_strong_failure_reason_is_reported_when_degrading(db, monkeypatch):
+    def fake_post(config, messages, max_tokens, timeout):
+        if config.tier == "strong":
+            raise llm.LLMUnavailable("HTTP 429: quota exceeded")
+        return {"ok": 1}, {}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    _, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user="quota")
+    assert meta["degraded_from"] == "gemini-3.8-flash" and "429" in meta["degraded_reason"]

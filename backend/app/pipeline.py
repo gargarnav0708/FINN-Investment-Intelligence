@@ -243,7 +243,8 @@ def deep_research(db: Session, ticker: str, progress: Progress = _noop, force_as
     progress("assessment", {"ticker": ticker, "step": "comparing promises with delivered numbers"})
     try:
         assessment = assess_narrative(db, company, force=force_assessment)
-        report["assessment"] = {"status": assessment.get("status"), "counts": assessment.get("counts"), "model": assessment.get("model")}
+        report["assessment"] = {"status": assessment.get("status"), "counts": assessment.get("counts"), "model": assessment.get("model"),
+                                "degraded_from": assessment.get("degraded_from"), "degraded_reason": assessment.get("degraded_reason")}
     except Exception as exc:
         db.rollback()
         report["assessment"] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}

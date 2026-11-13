@@ -355,7 +355,7 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
     for v in verdicts:
         counts[v["verdict"]] += 1
     payload = {"status": "available", "scorecard": result.get("scorecard") or {}, "counts": dict(counts),
-               "verdicts": verdicts, "delivered": table, "model": meta.get("model"), "degraded_from": meta.get("degraded_from"),
+               "verdicts": verdicts, "delivered": table, "model": meta.get("model"), "degraded_from": meta.get("degraded_from"), "degraded_reason": meta.get("degraded_reason"),
                "assessed_at": datetime.now(timezone.utc).isoformat(), "guidance_count": len(statements)}
     if record is None:
         record = NarrativeAssessment(company_id=company.id, status="available", payload=payload)

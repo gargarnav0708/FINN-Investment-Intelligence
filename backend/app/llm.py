@@ -24,9 +24,10 @@ import hashlib
 import json
 import os
 import re
+import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import requests
 from sqlalchemy import select
@@ -34,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from .models import LLMCall
 
+log = logging.getLogger("finn.llm")
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 _pace_lock = threading.Lock()
 _last_call: dict[str, float] = {}
@@ -51,6 +53,7 @@ class TierConfig:
     api_key: str
     rpm: float
     reasoning_effort: str | None = None
+    fallbacks: tuple[str, ...] = ()
 
 
 def _env(name: str, default: str = "") -> str:
@@ -74,7 +77,10 @@ def tier_config(tier: str) -> TierConfig | None:
     # off for bulk extraction. Only sent to Gemini unless set explicitly.
     effort = _env(f"FINN_LLM_{tier.upper()}_REASONING_EFFORT") or (
         ("low" if tier == "strong" else "none") if "googleapis.com" in base else "")
-    return TierConfig(tier=tier, model=model, base_url=base, api_key=key, rpm=max(rpm, 0.1), reasoning_effort=effort or None)
+    default_fallbacks = {"fast": "gemini-3.1-flash-lite,gemini-flash-lite-latest", "strong": "gemini-3.7-flash,gemini-flash-latest"}
+    raw = _env(f"FINN_LLM_{tier.upper()}_FALLBACKS") or (default_fallbacks[tier] if "googleapis.com" in base else "")
+    fallbacks = tuple(m.strip() for m in raw.split(",") if m.strip() and m.strip() != model)
+    return TierConfig(tier=tier, model=model, base_url=base, api_key=key, rpm=max(rpm, 0.1), reasoning_effort=effort or None, fallbacks=fallbacks)
 
 
 def is_configured() -> bool:
@@ -140,7 +146,7 @@ def _post(config: TierConfig, messages: list[dict], max_tokens: int, timeout: in
         payload["reasoning_effort"] = config.reasoning_effort
     headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
     last_error = "no attempt"
-    for attempt in range(4):
+    for attempt in range(5):
         _pace(config)
         try:
             response = requests.post(f"{config.base_url}/chat/completions", json=payload, headers=headers, timeout=timeout)
@@ -150,8 +156,10 @@ def _post(config: TierConfig, messages: list[dict], max_tokens: int, timeout: in
             continue
         if response.status_code == 429 or response.status_code >= 500:
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+            if response.status_code == 503 and attempt >= 1:
+                break  # model overloaded: switch to the fallback model rather than waiting it out
             retry_after = response.headers.get("Retry-After")
-            time.sleep(float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else 8 * (attempt + 1))
+            time.sleep(float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else min(6 * 2 ** attempt, 45))
             continue
         if response.status_code == 400 and "reasoning_effort" in payload:
             payload.pop("reasoning_effort")  # model rejects this thinking setting; retry without it
@@ -201,21 +209,35 @@ def complete_json(
         content = user
     messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     started = time.monotonic()
-    try:
-        parsed, usage = _post(config, messages, max_tokens, timeout)
-    except LLMUnavailable as exc:
+    db.commit()  # never hold a SQLite lock across a slow network call
+    errors: list[str] = []
+    used = config
+    parsed = usage = None
+    for model in (config.model, *config.fallbacks):
+        used = replace(config, model=model)
+        try:
+            parsed, usage = _post(used, messages, max_tokens, timeout)
+            break
+        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            errors.append(f"{model}: unparseable reply: {exc}"[:400])  # e.g. truncated JSON; try the next model
+            continue
+        except LLMUnavailable as exc:
+            errors.append(f"{model}: {exc}"[:400])
+            log.warning("model %s unavailable for %s: %s", model, purpose, str(exc)[:200])
+            if "HTTP 4" in str(exc) and "HTTP 429" not in str(exc) and "HTTP 404" not in str(exc):
+                break  # a request error will not be fixed by another model
+    if parsed is None:
+        reason = " | ".join(errors)
         if tier == "strong" and fallback_to_fast and tier_config("fast") and tier_config("fast").model != config.model:
             # Free-tier quotas on the reasoning model are small; degrade rather than fail the workflow.
+            _record(db, key, purpose, config, prompt_version, "error", None, reason, {}, started)
             result, meta = complete_json(db, tier="fast", purpose=purpose, prompt_version=prompt_version, system=system,
                                          user=user, images=images, max_tokens=max_tokens, timeout=timeout, fallback_to_fast=False)
-            return result, {**meta, "degraded_from": config.model}
-        _record(db, key, purpose, config, prompt_version, "error", None, str(exc), {}, started)
-        raise
-    except (ValueError, KeyError, json.JSONDecodeError) as exc:
-        _record(db, key, purpose, config, prompt_version, "error", None, f"Unparseable reply: {exc}", {}, started)
-        raise LLMUnavailable(f"Model reply could not be parsed as JSON: {exc}") from exc
-    row = _record(db, key, purpose, config, prompt_version, "success", parsed, None, usage, started)
-    return parsed, {"model": config.model, "tier": tier, "cached": False, "call_id": row.id}
+            return result, {**meta, "degraded_from": config.model, "degraded_reason": reason[:600]}
+        _record(db, key, purpose, config, prompt_version, "error", None, reason, {}, started)
+        raise LLMUnavailable(reason)
+    row = _record(db, key, purpose, used, prompt_version, "success", parsed, None, usage, started)
+    return parsed, {"model": used.model, "tier": tier, "cached": False, "call_id": row.id}
 
 
 def _record(db: Session, key: str, purpose: str, config: TierConfig, prompt_version: str, status: str,

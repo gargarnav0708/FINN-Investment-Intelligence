@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     demo_cmd = commands.add_parser("bootstrap-demo", help="Build the deployable demo database: portfolio data, results and deep research for demo tickers")
     demo_cmd.add_argument("--research", nargs="*", default=["TATAPOWER", "INFY", "TITAN", "ASIANPAINT", "DIXON"], help="Tickers to run deep research on")
     demo_cmd.add_argument("--days", type=int, default=30)
+    enrich_cmd = commands.add_parser("enrich-announcements", help="Classify announcements into the reference taxonomy, summarise material ones, profile management changes")
+    enrich_cmd.add_argument("--days", type=int, default=30)
+    enrich_cmd.add_argument("--reclassify", action="store_true")
     commands.add_parser("llm-usage", help="Print model call, cache-hit and token counts")
     snap_cmd = commands.add_parser("snapshot", help="Write a compressed copy of the database for deployment (snapshot/finn.db.gz)")
     snap_cmd.add_argument("--include-pdfs", action="store_true", help="Also copy downloaded PDFs (larger image)")
@@ -147,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
                     db.rollback()
                     result["research"][ticker] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
             result["alerts"] = evaluate_alerts(db)
+        elif args.command == "enrich-announcements":
+            from .announcement_intel import enrich_announcements
+            result = enrich_announcements(db, days=args.days, reclassify=args.reclassify)
         elif args.command == "llm-usage":
             from .llm import usage_summary
             result = usage_summary(db)

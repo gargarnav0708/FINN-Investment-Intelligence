@@ -226,7 +226,7 @@ def build_thesis_drift(db: Session, company: Company, basis: str = "consolidated
     tagged = []
     for item in disclosures:
         classification = classify_announcement(item)
-        if classification["category"] in {"capital", "governance", "ma_restructuring", "corporate_action", "management"}:
+        if classification["category"] in {"fund_raise", "litigation", "M&A", "management_change", "pledging", "insider_trading", "credit_rating", "dividend", "bonus_split"}:
             tagged.append({"id": item.id, "date": item.announcement_datetime.isoformat() if item.announcement_datetime else None,
                            "subject": item.subject, "category": classification["category"],
                            "materiality": classification["materiality"], "url": item.attachment_url or item.source_page_url})

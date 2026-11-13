@@ -14,5 +14,7 @@ services:
         value: gemini-3.5-flash-lite
       - key: FINN_LLM_STRONG_MODEL
         value: gemini-3.8-flash
+      - key: TAVILY_API_KEY
+        sync: false            # optional: web background for management changes
       - key: APP_ENV
         value: production

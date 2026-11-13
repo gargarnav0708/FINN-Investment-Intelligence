@@ -240,6 +240,21 @@ def deep_research(db: Session, ticker: str, progress: Progress = _noop, force_as
             db.rollback()
             guidance.append({"document_id": document.id, "status": "failed", "error": f"{type(exc).__name__}: {exc}"})
     report["guidance"] = guidance
+    from .announcement_intel import enrich_announcements
+    from .company_insights import build_bull_bear, build_business_snapshot
+    progress("announcements", {"ticker": ticker, "step": "classifying filings and profiling management changes"})
+    try:
+        report["announcement_intel"] = enrich_announcements(db, days=180, company_ids=[company.id])
+    except Exception as exc:
+        db.rollback()
+        report["announcement_intel"] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    progress("snapshot", {"ticker": ticker, "step": "reading the annual report's business and segment pages"})
+    try:
+        snap = build_business_snapshot(db, company)
+        report["business_snapshot"] = {"status": snap.get("status"), "segments": len(snap.get("segments") or []), "model": snap.get("model")}
+    except Exception as exc:
+        db.rollback()
+        report["business_snapshot"] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     progress("assessment", {"ticker": ticker, "step": "comparing promises with delivered numbers"})
     try:
         assessment = assess_narrative(db, company, force=force_assessment)
@@ -248,6 +263,14 @@ def deep_research(db: Session, ticker: str, progress: Progress = _noop, force_as
     except Exception as exc:
         db.rollback()
         report["assessment"] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    progress("bull_bear", {"ticker": ticker, "step": "building the bull and bear case from primary sources"})
+    try:
+        bb = build_bull_bear(db, company, force=force_assessment)
+        report["bull_bear"] = {"status": bb.get("status"), "bull": len(bb.get("bull") or []), "bear": len(bb.get("bear") or []),
+                               "dropped_ungrounded": bb.get("dropped_ungrounded"), "model": bb.get("model"), "degraded_from": bb.get("degraded_from")}
+    except Exception as exc:
+        db.rollback()
+        report["bull_bear"] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     return report
 
 

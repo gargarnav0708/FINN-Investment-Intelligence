@@ -117,6 +117,16 @@ python -m backend.app.cli deep-research DIXON TITAN       # any NSE tickers
 python -m backend.app.cli process-results --days 10       # read recent results filings across the portfolio
 ```
 
+## Push intelligence, research views and copilot
+
+- **Taxonomy + one-line summaries.** Every portfolio filing is mapped to the reference document's 17 categories by the fast model in batches of 20 (keyword rules as the fallback). Only high/medium items get a one-line summary; routine items are shown as the filing itself. `python -m backend.app.cli enrich-announcements --days 30`
+- **Management changes.** The appointment/resignation PDF is read for each person's brief profile (required under SEBI LODR Reg. 30); the profile is shown only if it is found near-verbatim in the filing. With `TAVILY_API_KEY` or `SERPER_API_KEY` set, a short professional background is added from search results that name the person, with links.
+- **Business snapshot.** What the company does and its segment revenue mix, read from the annual report's business/segment pages. Segment numbers are shown only if they appear on the cited page.
+- **Bull vs bear.** Three points each way from the annual report and last four transcripts (reasoning model); each point carries a verbatim quote and page, and ungrounded points are dropped.
+- **Today feed.** Phone-first: swipeable "what matters" cards with results numbers and people profiles inline; routine filings collapsed below.
+- **Copilot.** "Ask FINN" works from any screen: questions naming a company (or asked on its page) are answered from its documents; others from the last 14 days of material portfolio filings and alerts. Citations are checked server-side.
+- **End-of-day job.** Weekdays at 16:45 IST the app refreshes prices, filings, results, classifications and alerts (`FINN_EOD_TIME`, `FINN_SCHEDULER=off` to disable). On Render's free plan the instance sleeps, so `.github/workflows/eod-refresh.yml` calls `POST /api/refresh` at the same time: set the repository variable `FINN_URL`. The bell shows new alerts; allow browser notifications to get them while FINN is open.
+
 ## Deploy (Render)
 
 NSE often blocks cloud IP ranges, so the deployment ships a pre-built database and works even if live scraping fails from the host.

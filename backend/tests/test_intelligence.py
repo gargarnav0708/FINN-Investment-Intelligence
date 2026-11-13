@@ -34,7 +34,7 @@ def test_materiality_rules_explain_results_orders_and_routine_disclosures():
     assert classify_announcement(result)["materiality"] == "high"
     assert classify_announcement(result)["category"] == "results"
     assert "financial picture" in classify_announcement(result)["materiality_reason"]
-    assert classify_announcement(order)["category"] == "orders"
+    assert classify_announcement(order)["category"] == "press_release"
     assert classify_announcement(routine)["materiality"] == "routine"
 
 
@@ -134,11 +134,11 @@ def test_alert_settings_api_applies_category_and_asymmetric_price_thresholds():
             ]); db.commit()
         app.dependency_overrides[request_clock] = lambda: datetime(2026, 11, 9, 12, tzinfo=IST)
         client = TestClient(app)
-        update = client.patch("/api/alerts/settings", json={"announcement_categories":{"results":True,"orders":False},"positive_price_move_pct":5,"negative_price_move_pct":4,"unusual_volume_multiple":2})
+        update = client.patch("/api/alerts/settings", json={"announcement_categories":{"results":True,"press_release":False},"positive_price_move_pct":5,"negative_price_move_pct":4,"unusual_volume_multiple":2})
         assert update.status_code == 200
         prefs = update.json()
         assert prefs["announcement_categories"]["results"] is True
-        assert prefs["announcement_categories"]["orders"] is False
+        assert prefs["announcement_categories"]["press_release"] is False
         assert prefs["positive_price_move_pct"] == 5
         assert prefs["negative_price_move_pct"] == 4
         first = client.post("/api/alerts/evaluate").json()

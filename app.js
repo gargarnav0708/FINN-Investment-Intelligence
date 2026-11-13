@@ -335,3 +335,148 @@ async function loadCompanyMarket(ticker){
     date.textContent=`${m.latest_trading_date}${m.daily_return_pct!=null?` · ${fmtPct(m.daily_return_pct)}`:''}${m.relative_volume!=null?` · ${Number(m.relative_volume).toFixed(1)}× vol`:''}`;
   }catch(e){if(selectedCompany?.ticker===ticker)date.textContent='Market data unavailable'}
 }
+
+/* ===== Phone-first Today feed, announcement intelligence, bull/bear, copilot, notifications ===== */
+function istNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}))}
+function updateTodayChrome(){
+  const now=istNow(),h=now.getHours();
+  const el=document.getElementById('todayDate');if(el)el.textContent=new Intl.DateTimeFormat('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Asia/Kolkata'}).format(new Date()).toUpperCase();
+  const g=document.getElementById('greeting');if(g)g.textContent=h<5?'Late session':h<12?'Good morning':h<17?'Good afternoon':'Good evening';
+  const items=(dataMode==='live'?digestAnnouncements:announcements)||[];
+  const high=items.filter(a=>a.priority==='high').length,medium=items.filter(a=>a.priority==='medium').length;
+  const nav=document.getElementById('navCount');if(nav){nav.hidden=!high;nav.textContent=high}
+  const badge=document.getElementById('digestCountBadge');if(badge)badge.textContent=String(items.length).padStart(2,'0');
+  const dev=document.getElementById('developmentCount');if(dev)dev.textContent=items.length?`${high} high · ${medium} worth knowing · ${items.length-high-medium} routine`:'Nothing filed in this window';
+  const hc=document.getElementById('holdingCount');if(hc&&companies.length)hc.textContent=companies.length;
+}
+{
+  const baseMap=mapAnnouncement;
+  mapAnnouncement=function(item){
+    const a=baseMap(item);
+    a.category=item.category_label||a.category;
+    a.category_key=item.category;
+    a.summary_line=item.summary||null;
+    a.people=item.people||[];
+    if(a.summary_line)a.materiality_reason=a.summary_line;
+    else if(a.priority==='routine')a.materiality_reason='Routine filing — shown as the filing itself.';
+    if(!a.results_context&&a.people.length)a.results_context={kind:'people',people:a.people};
+    return a;
+  };
+  const baseResults=renderResultsContext;
+  renderResultsContext=function(result,ticker){return result?.kind==='people'?peopleHtml(result.people):baseResults(result,ticker)};
+  const baseDigest=loadDigest;
+  loadDigest=async function(){await baseDigest();renderTopCards();updateTodayChrome()};
+  updateBriefing=function(){if(dataMode==='live')renderDigestSummary();renderTopCards();updateTodayChrome()};
+}
+function peopleHtml(people){
+  return `<div class="people-block">${people.map(p=>{const src=sourceHref(p.source_url);return `<div class="person"><div class="person-head"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml([p.change,p.role].filter(Boolean).join(' · '))}</span>${p.effective_date?`<small>w.e.f. ${escapeHtml(p.effective_date)}</small>`:''}</div>${p.profile?`<p>“${escapeHtml(p.profile)}”${src?` <a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer">filing${p.profile_page?` p.${p.profile_page}`:''} ↗</a>`:''}</p>`:'<p class="muted">The filing carries no profile for this person.</p>'}${p.background?`<p class="person-bg"><b>Background</b> ${escapeHtml(p.background)} ${(p.background_sources||[]).map(s=>`<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(new URL(s.url).hostname.replace('www.',''))} ↗</a>`).join(' ')}</p>`:''}${p.reason?`<p class="muted">Reason given: ${escapeHtml(p.reason)}</p>`:''}</div>`}).join('')}</div>`;
+}
+function miniResults(rc){
+  if(!rc||rc.status!=='available'||!rc.metrics)return '';
+  const cell=(k,l)=>{const m=rc.metrics[k];if(!m)return '';const y=m.yoy?.status==='available'?Number(m.yoy.percentage_change):null;return `<div><span>${l}</span><b>${Number(m.value_in_crore).toLocaleString('en-IN',{maximumFractionDigits:0})}</b><i class="${y==null?'':y>=0?'up':'down'}">${y==null?'—':`${y>=0?'+':''}${y.toFixed(1)}% YoY`}</i></div>`};
+  return `<div class="mini-results">${cell('revenue','Revenue')}${cell('ebitda','EBITDA')}${cell('pbt','PBT')}${cell('pat','PAT')}</div><div class="mini-foot">${escapeHtml(rc.fiscal_quarter||'')} ${escapeHtml(rc.fiscal_year||'')} · ₹ crore · ${rc.verification==='verified'?'auto-verified':rc.verification==='unverified'?'unverified':'filing'}</div>`;
+}
+function renderTopCards(){
+  const host=document.getElementById('topCards');if(!host)return;
+  const items=(dataMode==='live'?digestAnnouncements:announcements)||[];
+  let top=items.filter(a=>a.priority==='high');
+  if(top.length<3)top=top.concat(items.filter(a=>a.priority==='medium').slice(0,3-top.length));
+  top=top.slice(0,8);
+  if(!items.length){host.innerHTML=`<div class="top-cards-empty">${dataMode==='live'?'No filings across your portfolio in this window. Widen the window above.':'Loading today\'s developments…'}</div>`;return}
+  if(!top.length){host.innerHTML=`<div class="top-cards-empty">Nothing material in this window — ${items.length} routine filing${items.length===1?'':'s'} below.</div>`;return}
+  host.innerHTML=`<div class="top-cards-head"><span class="section-kicker">WHAT MATTERS · ${top.length}</span><span class="swipe-hint">swipe →</span></div><div class="top-cards-track">${top.map((a,i)=>{
+    const rc=a.results_context?.kind==='people'?null:a.results_context;const people=a.people||[];
+    const body=rc&&rc.status==='available'?miniResults(rc):people.length?`<div class="mini-person"><strong>${escapeHtml(people[0].name)}</strong><span>${escapeHtml([people[0].change,people[0].role].filter(Boolean).join(' · '))}</span><p>${escapeHtml(people[0].background||people[0].profile||'')}</p></div>`:'';
+    const src=safeUrl(a.attachment_url)||safeUrl(a.source_page_url);
+    return `<article class="top-card ${escapeHtml(a.priority)}" data-id="${escapeHtml(a.id)}"><div class="top-card-meta"><span class="top-index">${String(i+1).padStart(2,'0')}</span><strong>${escapeHtml(a.company)}</strong><span class="top-cat">${escapeHtml(a.category)}</span></div><h3>${escapeHtml(a.summary_line||a.title)}</h3>${a.summary_line?`<p class="top-sub">${escapeHtml(a.title)}</p>`:''}${body}<div class="top-card-foot"><span>${escapeHtml(a.time)}</span>${src?`<a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer">Filing ↗</a>`:''}<button data-top-company="${escapeHtml(a.ticker)}">Research →</button></div></article>`}).join('')}</div>`;
+  host.querySelectorAll('[data-top-company]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();selectCompany(b.dataset.topCompany);showView('research')}));
+  host.querySelectorAll('.top-card').forEach(c=>c.addEventListener('click',e=>{if(e.target.closest('a,button'))return;openDetail(c.dataset.id)}));
+}
+
+/* Business snapshot with segment mix + bull vs bear */
+{
+  const baseProfile=loadCompanyProfile;
+  loadCompanyProfile=async function(ticker){
+    await baseProfile(ticker);
+    try{const p=await apiGet(`/api/company-profile/${encodeURIComponent(ticker)}`);if(selectedCompany?.ticker!==ticker)return;
+      const segs=p.segments||[];const tags=document.getElementById('segmentTags'),caption=document.querySelector('.segment-caption');
+      if(segs.some(s=>s.share_pct!=null)){tags.innerHTML=`<div class="segment-bars">${segs.map(s=>`<div class="segment-bar"><div><span>${escapeHtml(s.name)}</span><b>${s.share_pct!=null?s.share_pct+'%':'—'}</b></div><i style="width:${Math.max(2,s.share_pct||0)}%"></i>${s.what?`<small>${escapeHtml(s.what)}</small>`:''}</div>`).join('')}</div>`;
+        if(caption){const src=sourceHref(segs.find(s=>s.source_url)?.source_url);caption.innerHTML=`Revenue mix ${escapeHtml(p.fiscal_year||'')} · ${escapeHtml(p.document_title||'annual report')}${src?` · <a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer">segment table ↗</a>`:''}${p.mix_note?`<br>${escapeHtml(p.mix_note)}`:''}`}}
+    }catch{}
+  };
+  const baseMgmt=loadManagement;
+  loadManagement=async function(ticker){loadInsights(ticker);return baseMgmt(ticker)};
+}
+async function loadInsights(ticker){
+  const host=document.getElementById('bullBear');if(!host)return;
+  if(dataMode!=='live'){host.innerHTML='';return}
+  host.innerHTML='<div class="empty-filter">Loading bull vs bear…</div>';
+  try{const d=await apiGet(`/api/research/${encodeURIComponent(ticker)}/insights`);if(selectedCompany?.ticker!==ticker)return;renderBullBear(d.bull_bear||{})}
+  catch(e){host.innerHTML=''}
+}
+function renderBullBear(bb){
+  const host=document.getElementById('bullBear');
+  const head=`<div class="section-head"><div><span class="section-kicker">THE CASE, BOTH WAYS · PRIMARY SOURCES</span><h2 id="bullBearTitle">Bull vs bear</h2></div>${bb.model?`<span class="period-placeholder">${escapeHtml(bb.model)}</span>`:''}</div>`;
+  if(!['available','partial'].includes(bb.status)){host.innerHTML=head+`<div class="empty-filter">${bb.status==='not_run'?'Run “Read last 4 concalls + results” in Commitments to build the bull and bear case from the annual report and transcripts.':escapeHtml(bb.message||'Not available yet.')}</div>`;return}
+  const col=(side,label)=>`<div class="bb-col bb-${side}"><h3>${label}</h3>${(bb[side]||[]).map(p=>{const src=sourceHref(p.source_url);return `<article><p class="bb-point">${escapeHtml(p.point)}</p><blockquote>“${escapeHtml(p.quote)}”</blockquote>${src?`<a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.document_title||'Source')} · p.${p.page} ↗</a>`:''}</article>`}).join('')}</div>`;
+  host.innerHTML=head+`<div class="bb-grid">${col('bull','Bull')}${col('bear','Bear')}</div>${bb.verdict?`<p class="bb-verdict"><b>What decides it:</b> ${escapeHtml(bb.verdict)}</p>`:''}`;
+}
+
+/* Copilot */
+const copilotState={thread:[]};
+function copilotTicker(){return document.getElementById('researchView')?.classList.contains('active')?selectedCompany?.ticker:null}
+function openCopilot(){
+  const t=copilotTicker();document.getElementById('copilotScope').textContent=t?`${t} · documents`:'Portfolio · last 14 days';
+  const sug=t?[`What did management guide for ${t} and did they deliver?`,`How has ${t}'s debt changed?`,`What are the main risks management mentioned?`]:['What were the most important developments this week?','Any management changes across my portfolio?','Which companies reported results and how were they?'];
+  document.getElementById('copilotSuggestions').innerHTML=sug.map(s=>`<button type="button">${escapeHtml(s)}</button>`).join('');
+  document.querySelectorAll('#copilotSuggestions button').forEach(b=>b.addEventListener('click',()=>askCopilot(b.textContent)));
+  document.getElementById('copilotSheet').showModal();setTimeout(()=>document.getElementById('copilotInput').focus(),50);
+}
+function renderCopilot(){
+  document.getElementById('copilotThread').innerHTML=copilotState.thread.map(m=>m.role==='user'?`<div class="cp-user">${escapeHtml(m.text)}</div>`:`<div class="cp-answer ${m.pending?'pending':''}">${m.scopeLabel?`<span class="cp-scope">${escapeHtml(m.scopeLabel)}</span>`:''}<p>${escapeHtml(m.text).replace(/\n/g,'<br>')}</p>${(m.citations||[]).length?`<div class="cp-cites">${m.citations.map(c=>{const u=sourceHref(c.url);const label=c.label||[c.title,c.page?`p.${c.page}`:null,c.period].filter(Boolean).join(' · ');return u?`<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a>`:`<span>${escapeHtml(label)}</span>`}).join('')}</div>`:''}</div>`).join('');
+  const t=document.getElementById('copilotThread');t.scrollTop=t.scrollHeight;
+}
+async function askCopilot(question){
+  question=(question||'').trim();if(!question)return;
+  if(dataMode!=='live'){toast('Copilot needs Live Data');return}
+  copilotState.thread.push({role:'user',text:question},{role:'finn',text:'Reading sources…',pending:true});renderCopilot();
+  document.getElementById('copilotInput').value='';document.getElementById('copilotSuggestions').innerHTML='';
+  try{const r=await apiGet('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,ticker:copilotTicker()})});
+    copilotState.thread[copilotState.thread.length-1]={role:'finn',text:r.answer,citations:r.citations||[],scopeLabel:r.scope==='company'?`${r.ticker} · company documents`:r.scope==='portfolio'?'Portfolio · recent filings':''};
+  }catch(e){copilotState.thread[copilotState.thread.length-1]={role:'finn',text:`Could not answer: ${e.message}`}}
+  renderCopilot();
+}
+document.getElementById('copilotFab')?.addEventListener('click',openCopilot);
+document.getElementById('copilotForm')?.addEventListener('submit',e=>{e.preventDefault();askCopilot(document.getElementById('copilotInput').value)});
+
+/* Alert notifications: poll, badge, browser notification */
+function lastSeenAlert(){try{return Number(localStorage.getItem('finn_last_alert')||0)}catch{return 0}}
+function markAlertsSeen(id){try{localStorage.setItem('finn_last_alert',String(id))}catch{}}
+async function pollAlerts(){
+  if(dataMode!=='live')return;
+  try{const r=await apiGet('/api/alerts');const items=r.items||[];alertEvents=items;renderAlertHistory();
+    const seen=lastSeenAlert(),fresh=items.filter(a=>a.id>seen);const bell=document.querySelector('.notification-button b');
+    if(bell){bell.textContent=fresh.length?String(Math.min(fresh.length,9)):'';bell.classList.toggle('has-count',!!fresh.length)}
+    if(fresh.length&&seen&&'Notification' in window&&Notification.permission==='granted'){const a=fresh[0];new Notification(`FINN · ${a.ticker}`,{body:a.reason.slice(0,140),tag:`finn-${a.id}`})}
+    if(!seen&&items.length)markAlertsSeen(Math.max(...items.map(a=>a.id)));
+  }catch{}
+}
+document.querySelector('.notification-button')?.addEventListener('click',async()=>{
+  if('Notification' in window&&Notification.permission==='default'){try{await Notification.requestPermission()}catch{}}
+  if(alertEvents.length)markAlertsSeen(Math.max(...alertEvents.map(a=>a.id)));
+  const bell=document.querySelector('.notification-button b');if(bell){bell.textContent='';bell.classList.remove('has-count')}
+  showView('today');document.querySelector('.alert-card')?.scrollIntoView({behavior:'smooth',block:'start'});
+  toast('Notification' in window&&Notification.permission==='granted'?'Alerts on: FINN will notify you when a rule triggers':'Showing triggered alerts');
+});
+setInterval(pollAlerts,5*60*1000);
+setTimeout(()=>{updateTodayChrome();pollAlerts()},2500);
+updateTodayChrome();
+
+/* Live by default; demo only as a clearly labelled, confirmed fallback */
+{
+  const toggle=document.getElementById('dataModeToggle');
+  if(toggle){const fresh=toggle.cloneNode(true);toggle.replaceWith(fresh);
+    fresh.addEventListener('click',()=>{if(dataMode==='live'){if(confirm('Switch to the offline demo? It shows FICTIONAL sample events, not your portfolio.'))setDemoData()}else initializeApp()})}
+  const baseChrome=updateModeChrome;
+  updateModeChrome=function(){baseChrome();if(dataMode==='demo'){document.getElementById('modeLabel').textContent='DEMO · FICTIONAL';document.body.classList.add('demo-mode')}else document.body.classList.remove('demo-mode');updateTodayChrome()};
+}

@@ -10,41 +10,102 @@ from sqlalchemy.orm import Session
 from .models import AlertEvent, AlertPreference, Announcement, Company, DailyMarketData, PortfolioHolding, utcnow
 
 IST = ZoneInfo("Asia/Kolkata")
-ALERT_CATEGORIES = {
-    "results": "Quarterly and annual results",
-    "orders": "Material orders and contracts",
-    "ma_restructuring": "Acquisitions, divestments and restructuring",
-    "management": "Management changes",
-    "capital": "Fundraising and capital events",
-    "governance": "Regulatory, legal, governance and auditor events",
+# Reference taxonomy (ENAM brief): key -> (label, default materiality, why it can matter)
+TAXONOMY: dict[str, tuple[str, str, str]] = {
+    "results": ("Results", "high", "Quarterly or annual results may change the reported financial picture."),
+    "M&A": ("M&A", "high", "An acquisition, merger, demerger or JV can change the business or its capital structure."),
+    "fund_raise": ("Fund raise", "high", "New equity or debt can mean dilution, leverage or a change in capital allocation."),
+    "management_change": ("Management change", "high", "A change at the top can affect strategy, execution or oversight."),
+    "litigation": ("Litigation / regulatory", "high", "A legal or regulatory action may create financial or governance risk."),
+    "insider_trading": ("Insider trading", "medium", "Promoter or insider dealing in the stock can signal their view."),
+    "earnings_call": ("Earnings call", "medium", "Concall material carries management's own guidance and tone."),
+    "investor_meetings": ("Investor meetings", "routine", "Scheduled meetings with investors; content is rarely disclosed."),
+    "credit_rating": ("Credit rating", "medium", "A rating action changes the cost and availability of debt."),
+    "dividend": ("Dividend", "medium", "A cash payout to shareholders, with a record date."),
+    "bonus_split": ("Bonus / split", "medium", "Share count changes; no cash changes hands."),
+    "capex": ("Capex", "medium", "New capacity or a plant changes future growth and the funding need."),
+    "press_release": ("Press release", "medium", "Order wins, launches or partnerships may affect the revenue pipeline."),
+    "postal_ballot": ("Postal ballot", "routine", "Shareholder vote notice or result."),
+    "agm_egm": ("AGM / EGM", "routine", "General meeting notice or outcome."),
+    "pledging": ("Pledging", "high", "Promoter pledges are a leverage and governance risk signal."),
+    "unclassified": ("Routine", "routine", "Routine compliance paperwork; kept for completeness, not elevated."),
 }
+MATERIAL_CATEGORIES = [k for k in TAXONOMY if k not in {"investor_meetings", "postal_ballot", "agm_egm", "unclassified", "earnings_call", "bonus_split"}]
+ALERT_CATEGORIES = {key: TAXONOMY[key][0] for key in MATERIAL_CATEGORIES}
+
+ROUTINE_TERMS = ("trading window", "loss of share certificate", "duplicate share", "74(5)", "compliance certificate",
+                 "esop", "esos", "employee stock option", "brsr", "business responsibility", "certificate under regulation",
+                 "reconciliation of share capital", "secretarial compliance", "shareholding pattern", "change in registrar",
+                 "voting results of", "scrutinizer")
+KEYWORD_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pledging", ("pledge", "encumbrance", "regulation 31")),
+    ("insider_trading", ("insider trading", "regulation 7(2)", "regulation 7 (2)", "regulation 29", "substantial acquisition of shares", "sast")),
+    ("earnings_call", ("transcript", "earnings call", "earning call", "conference call", "concall", "audio recording", "audio/video recording")),
+    ("results", ("financial result", "quarterly results", "audited results", "unaudited", "integrated filing")),
+    ("credit_rating", ("credit rating", "crisil", "icra", "care ratings", "india ratings", "rating action", "revision in rating", "rating")),
+    ("fund_raise", ("qualified institutions placement", "qip", "preferential issue", "preferential allotment", "rights issue", "fund raising",
+                    "fundraising", "non-convertible debenture", "ncd", "commercial paper", "buyback", "buy-back", "debenture", "bond issue", "raising of funds")),
+    ("bonus_split", ("bonus issue", "bonus shares", "sub-division", "subdivision", "stock split", "split of")),
+    ("dividend", ("dividend",)),
+    ("management_change", ("appointment", "resignation", "cessation", "change in director", "key managerial personnel", "chief financial officer",
+                           "chief executive", "managing director", "re-appointment", "retirement", "change in management", "senior management")),
+    ("M&A", ("acquisition", "acquire", "merger", "amalgamation", "demerger", "scheme of arrangement", "joint venture", "divest", "disinvest",
+             "incorporation of", "wholly owned subsidiary", "stake sale", "sale of stake", "investment in subsidiary", "slump sale")),
+    ("litigation", ("penalty", "show cause", "court", "tribunal", "nclt", "nclat", "insolvency", "arbitration", "lawsuit", "fine imposed",
+                    "warning letter", "search and seizure", "regulatory action", "adjudication", "demand order", "tax demand", "litigation", "fraud", "default")),
+    ("capex", ("capex", "capital expenditure", "capacity expansion", "new plant", "commissioning", "commissioned", "greenfield", "brownfield", "commercial operation", "expansion project")),
+    ("postal_ballot", ("postal ballot", "e-voting", "remote e-voting")),
+    ("agm_egm", ("annual general meeting", " agm", "egm", "extra-ordinary general meeting", "extraordinary general meeting", "book closure")),
+    ("investor_meetings", ("analyst", "investor meet", "institutional investor", "investor conference", "investors meet", "one-on-one")),
+    ("press_release", ("press release", "media release", "order", "contract", "letter of award", "launch", "partnership", "clarification", "agreement", "mou")),
+)
+
+
+def keyword_category(item: Announcement) -> str:
+    text = f" {item.original_category or ''} {item.subject or ''} {item.details or ''} ".lower()
+    head = f" {item.original_category or ''} {item.subject or ''} ".lower()
+    if "auditor" in text and "resign" in text:
+        return "management_change"
+    if any(term in head for term in ROUTINE_TERMS):
+        return "unclassified"
+    for category, terms in KEYWORD_RULES:
+        if any(term in text for term in terms):
+            if category == "management_change" and "auditor" in text:
+                return "unclassified"  # auditor appointments are routine per the reference taxonomy
+            return category
+    return "unclassified"
+
+
+def keyword_materiality(item: Announcement, category: str) -> str:
+    text = f"{item.subject or ''} {item.details or ''}".lower()
+    level = TAXONOMY[category][1]
+    if category == "results" and any(t in text for t in ("newspaper", "publication", "intimation of board meeting", "prior intimation")):
+        return "routine"
+    if category == "capex" and any(t in text for t in ("approv", "board", "capex of", "investment of", "crore")):
+        return "high"  # a decision to spend, not an operating update
+    if category == "credit_rating" and any(t in text for t in ("downgrade", "negative", "watch with negative")):
+        return "high"
+    if category == "earnings_call" and any(t in text for t in ("intimation", "schedule")):
+        return "routine"
+    if category == "management_change" and any(t in text for t in ("company secretary", "compliance officer")) and not any(t in text for t in ("chief", "managing director", "director")):
+        return "medium"
+    return level
 
 
 def classify_announcement(item: Announcement) -> dict:
-    subject = item.subject or ""
-    source_category = item.original_category or ""
-    text = f"{source_category} {subject} {item.details or ''}".lower()
-    category = "other"
-    level = "routine"
-    reason = "Routine exchange disclosure; retained in the digest for completeness."
-    candidates = [
-        ("results", "high", ("financial results", "quarterly results", "audited results", "unaudited results", "outcome of board meeting"), "Quarterly or annual results may change the reported financial picture."),
-        ("ma_restructuring", "high", ("acquisition", "acquires", "divestment", "merger", "amalgamation", "restructuring", "scheme of arrangement"), "A transaction or restructuring may materially change the business or its capital structure."),
-        ("orders", "high", ("bagging/receiving of orders", "order received", "letter of award", "contract awarded", "material order", "work order"), "A disclosed order or contract may affect the company’s revenue pipeline or execution workload."),
-        ("capital", "high", ("fund raising", "fundraising", "qualified institutions placement", "preferential issue", "rights issue", "debt raise", "non-convertible debenture", "buyback", "dividend"), "A financing or capital-allocation decision can affect funding, dilution or shareholder returns."),
-        ("management", "high", ("appointment of director", "resignation of director", "cessation of director", "chief financial officer", "managing director", "key managerial personnel", "auditor resignation"), "A senior leadership or auditor change may affect oversight or execution."),
-        ("governance", "high", ("default", "insolvency", "fraud", "search and seizure", "regulatory action", "show cause notice", "penalty", "forensic audit", "auditor resignation", "material litigation"), "A governance, legal or regulatory event may create material business or control risk."),
-        ("operations", "medium", ("commissioning", "commercial operation", "capacity addition", "project update", "production commenced", "plant shutdown", "project completion"), "An operating or project milestone may affect capacity or delivery."),
-        ("corporate_action", "medium", ("postal ballot", "special resolution", "record date", "rights entitlement"), "A corporate action may require investor attention."),
-    ]
-    for bucket, priority, terms, explanation in candidates:
-        if any(term in text for term in terms):
-            category, level, reason = bucket, priority, explanation
-            break
-    if category == "other" and item.normalized_category in {"Investor meeting", "Shareholding", "Regulatory/compliance"}:
-        category, level = "routine", "routine"
-        reason = "Routine investor-relations or compliance disclosure; available for review but not elevated."
-    return {"category": category, "materiality": level, "materiality_reason": reason}
+    try:
+        insight = item.insight
+    except Exception:
+        insight = None
+    if insight is not None and insight.category in TAXONOMY:
+        label, _, why = TAXONOMY[insight.category]
+        return {"category": insight.category, "category_label": label, "materiality": insight.materiality,
+                "materiality_reason": insight.reason or why, "summary": insight.summary, "classification_method": insight.method,
+                "people": insight.people or []}
+    category = keyword_category(item)
+    label, _, why = TAXONOMY[category]
+    return {"category": category, "category_label": label, "materiality": keyword_materiality(item, category),
+            "materiality_reason": why, "summary": None, "classification_method": "keyword", "people": []}
 
 
 def get_alert_preferences(db: Session, create: bool = True) -> AlertPreference | None:

@@ -368,3 +368,38 @@ class NarrativeAssessment(Base):
     model: Mapped[str | None] = mapped_column(String(80))
     input_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AnnouncementInsight(Base):
+    """Taxonomy category, materiality, one-line summary and (for management changes) people profiles."""
+    __tablename__ = "announcement_insights"
+    __table_args__ = (UniqueConstraint("announcement_id", name="uq_announcement_insight"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id", ondelete="CASCADE"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    materiality: Mapped[str] = mapped_column(String(16), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(String(24), nullable=False)  # llm | keyword
+    model: Mapped[str | None] = mapped_column(String(80))
+    people: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    people_status: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    announcement: Mapped[Announcement] = relationship(back_populates="insight")
+
+
+Announcement.insight = relationship(AnnouncementInsight, back_populates="announcement", uselist=False, cascade="all, delete-orphan")
+
+
+class CompanyInsight(Base):
+    """Model-derived company views (business snapshot, bull vs bear) with grounded citations."""
+    __tablename__ = "company_insights"
+    __table_args__ = (UniqueConstraint("company_id", "kind", name="uq_company_insight_kind"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(80))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

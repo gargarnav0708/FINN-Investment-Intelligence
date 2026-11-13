@@ -1,0 +1,19 @@
+# Weekday end-of-day refresh for the deployed app (Render's free plan sleeps, so its in-process
+# scheduler cannot be relied on). Set the repository variable FINN_URL, e.g. https://finn.onrender.com
+name: EOD refresh
+on:
+  schedule:
+    - cron: "20 11 * * 1-5"   # 16:50 IST, after the NSE close
+  workflow_dispatch: {}
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the service and start the refresh
+        run: |
+          test -n "${{ vars.FINN_URL }}" || { echo "Set the FINN_URL repository variable"; exit 1; }
+          for i in 1 2 3 4 5; do
+            curl -fsS --max-time 90 "${{ vars.FINN_URL }}/api/health" && break
+            sleep 20
+          done
+          curl -fsS --max-time 60 -X POST "${{ vars.FINN_URL }}/api/refresh"

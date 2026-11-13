@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1115" />
     <title>FINN — Investment intelligence</title>
-    <link rel="stylesheet" href="./styles.css?v=narrative-1" />
+    <link rel="stylesheet" href="./styles.css?v=feed-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -13,7 +13,7 @@
         <a class="brand" href="#today" aria-label="FINN home"><span class="brand-mark">f</span><span class="brand-name">finn<span class="brand-dot">.</span></span></a>
         <div class="rail-label">WORKSPACE</div>
         <nav class="primary-nav">
-          <button class="nav-item active" data-view="today"><span class="nav-glyph">▦</span><span>Today</span><span class="nav-count">3</span></button>
+          <button class="nav-item active" data-view="today"><span class="nav-glyph">▦</span><span>Today</span><span class="nav-count" id="navCount" hidden></span></button>
           <button class="nav-item" data-view="research"><span class="nav-glyph">⌕</span><span>Research</span></button>
         </nav>
         <div class="rail-divider"></div>
@@ -37,22 +37,21 @@
 
         <section class="view active" id="todayView" aria-labelledby="todayTitle">
           <div class="page-heading">
-            <div><div class="eyebrow"><span class="eyebrow-line"></span> MONDAY, 9 NOVEMBER 2026</div><h1 id="todayTitle">Good morning, Analyst<span class="period">.</span></h1><p class="page-subtitle">A clear view of what changed across your portfolio.</p></div>
+            <div><div class="eyebrow"><span class="eyebrow-line"></span> <span id="todayDate">TODAY</span></div><h1 id="todayTitle"><span id="greeting">Today</span><span class="period">.</span></h1><p class="page-subtitle">A clear view of what changed across your portfolio.</p></div>
             <label class="date-control"><span class="calendar-icon">▦</span><select id="digestWindow" aria-label="Digest time window"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="custom">Custom dates</option></select><span class="chevron">⌄</span></label>
           </div>
-          <div class="demo-notice"><span class="notice-icon">i</span><span><strong>Illustrative demo</strong> — sample events and figures are fictional and shown for product demonstration.</span><button aria-label="Dismiss demo notice" id="dismissNotice">×</button></div>
+          <div class="demo-notice"><span class="notice-icon">i</span><span><strong>Connecting to FINN</strong> — loading live portfolio data.</span><button aria-label="Dismiss demo notice" id="dismissNotice">×</button></div>
 
           <div class="overview-row">
-            <div class="overview-copy"><span class="section-kicker">YOUR PORTFOLIO</span><div class="overview-title"><strong id="holdingCount">18</strong><span>holdings</span><span class="overview-sep"></span><span id="developmentCount">3 developments to review</span></div></div>
+            <div class="overview-copy"><span class="section-kicker">YOUR PORTFOLIO</span><div class="overview-title"><strong id="holdingCount">—</strong><span>holdings</span><span class="overview-sep"></span><span id="developmentCount">Loading…</span></div></div>
             <div class="market-mini"><span class="market-label">NIFTY 50</span><strong>—</strong><span class="neutral-tag">EOD data</span><span class="mini-spark" aria-hidden="true"><svg viewBox="0 0 96 24"><path d="M1 18 L13 16 L22 19 L33 10 L43 13 L53 7 L63 11 L74 5 L83 8 L95 3"/></svg></span></div>
           </div>
 
           <div class="content-grid">
             <div class="feed-column">
-              <div class="section-head"><div><span class="section-kicker">THE BRIEFING</span><h2>Worth your attention <span class="muted-count">03</span></h2></div><button class="text-button" id="viewAll">View all <span>→</span></button></div>
-              <div class="briefing-card" id="briefingCard">
-                <div class="briefing-index">01</div><div class="briefing-body"><div class="briefing-meta"><span class="company-chip tata-chip">TP</span><strong>Tata Power</strong><span class="ticker-label">NSE · TATAPOWER</span><span class="meta-spacer"></span><span class="priority-dot high"></span><span class="priority-word">HIGH</span></div><h3>Quarterly results filed</h3><p>Operating performance changed across the quarter. Compare the reported figures with management’s previous outlook.</p><div class="briefing-foot"><span class="source-pill"><span class="file-glyph">▤</span> Results filing</span><span class="briefing-time">Illustrative · 08:42</span><button class="investigate-button" data-company="TATAPOWER">Investigate <span>↗</span></button></div></div>
-              </div>
+              <div class="section-head"><div><span class="section-kicker">THE BRIEFING</span><h2>Portfolio digest <span class="muted-count" id="digestCountBadge"></span></h2></div><button class="text-button" id="viewAll">View all <span>→</span></button></div>
+              <section class="top-cards" id="topCards" aria-label="Top developments"><div class="top-cards-empty">Loading today's developments…</div></section>
+              <div class="briefing-card" id="briefingCard" hidden></div>
               <div class="digest-custom" id="digestCustom" hidden><label>From <input type="date" id="digestFrom"></label><label>To <input type="date" id="digestTo"></label><button id="applyDigestDates">Apply</button></div>
               <div class="digest-range" id="digestRange">Last 24 hours · Asia/Kolkata</div>
               <div class="digest-counts" id="digestCounts"></div>
@@ -67,7 +66,7 @@
               <div class="desk-note"><span class="desk-spark">✳</span><div><strong>From signal to context</strong><p>FINN connects what happened today with what management said before.</p><button data-view="research">Explore Research <span>→</span></button></div></div>
             </aside>
           </div>
-          <footer class="page-footer"><span>FINN INTELLIGENCE DESK</span><span id="todayFooterText">Data shown is illustrative · 09 Nov 2026</span></footer>
+          <footer class="page-footer"><span>FINN INTELLIGENCE DESK</span><span id="todayFooterText">Exchange filings · EOD prices · primary documents</span></footer>
         </section>
 
         <section class="view" id="researchView" aria-labelledby="researchTitle">
@@ -100,6 +99,7 @@
               <div class="trajectory-metrics" data-research-tab="financials" hidden role="group" aria-label="Trajectory metric"><button class="active" data-metric="revenue">Revenue</button><button data-metric="pbt">PBT</button><button data-metric="pat">PAT</button></div>
               <div class="chart-card" data-research-tab="financials" hidden><div class="chart-placeholder" id="financialChart"><div class="chart-empty"><div class="chart-icon">⌁</div><strong>Evidence will fill this view</strong><span>Verified financial values appear here.</span></div></div><div class="chart-footer"><span id="chartFooterText">Quarterly values · INR crore · verified source observations only.</span><button id="chartSource">How we calculate <span>↗</span></button></div></div>
               <section class="financial-analysis" id="financialAnalysis" data-research-tab="financials" hidden><div class="section-head"><div><span class="section-kicker">BALANCE SHEET & CASH QUALITY</span><h2>Cash, debt and coverage</h2></div><span id="analysisPeriod" class="period-placeholder">Annual values</span></div><div id="analysisSignals" class="analysis-signals"></div><div id="analysisCards" class="analysis-cards"><p>Validated annual balance-sheet and cash-flow rows will appear here.</p></div><div id="analysisObservations" class="financial-year-grid"></div></section>
+              <section class="bullbear" id="bullBear" data-research-tab="overview" aria-labelledby="bullBearTitle"></section>
               <div class="section-head developments-head" data-research-tab="overview"><div><span class="section-kicker">WHAT CHANGED</span><h2>Recent developments <span class="muted-count">02</span></h2></div><button class="text-button" data-view="today">All activity <span>→</span></button></div><div id="companyDevelopments" class="company-developments" data-research-tab="overview"></div>
             </div>
             <aside class="research-aside">
@@ -113,8 +113,16 @@
 
       <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active" data-view="today"><span>▦</span>Today</button><button data-view="research"><span>⌕</span>Research</button><button id="mobilePortfolio"><span>◫</span>Portfolio</button></nav>
     </div>
+    <button class="copilot-fab" id="copilotFab" aria-haspopup="dialog" aria-controls="copilotSheet"><span>✳</span> Ask FINN</button>
+    <dialog id="copilotSheet" class="copilot-sheet" aria-labelledby="copilotTitle">
+      <div class="copilot-head"><div><span class="section-kicker">COPILOT</span><h2 id="copilotTitle">Ask FINN</h2></div><span class="copilot-scope" id="copilotScope">Portfolio</span><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form></div>
+      <div class="copilot-thread" id="copilotThread" aria-live="polite"></div>
+      <div class="copilot-suggestions" id="copilotSuggestions"></div>
+      <form class="copilot-form" id="copilotForm"><input id="copilotInput" autocomplete="off" placeholder="Ask about your portfolio or a company…" aria-label="Ask FINN"/><button aria-label="Send">↑</button></form>
+      <p class="copilot-note">Answers come only from stored filings, transcripts and annual reports, with sources. Not investment advice.</p>
+    </dialog>
     <div class="toast" id="toast" role="status"></div>
     <dialog id="detailDialog" class="detail-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close details">×</button></form><div id="dialogContent"></div></dialog>
-    <script src="./app.js?v=narrative-1"></script>
+    <script src="./app.js?v=feed-2"></script>
   </body>
 </html>

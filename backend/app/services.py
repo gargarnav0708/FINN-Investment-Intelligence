@@ -399,8 +399,10 @@ def sync_all(db: Session, lookback_days: int = 30, download_docs: bool = True, m
     documents = discover_documents(db, "TATAPOWER", download=download_docs)
     from .pipeline import process_portfolio_results
     results = process_portfolio_results(db, days=max(3, min(lookback_days, 10)))
+    from .announcement_intel import enrich_announcements
+    intel = enrich_announcements(db, days=lookback_days)
     alerts = evaluate_alerts(db) if market.get("status") in {"success", "partial"} or announcements.get("status") in {"success", "partial"} else {"status":"skipped","created":0}
-    return {"market": market, "announcements": announcements, "documents": documents, "results": results, "alerts": alerts}
+    return {"market": market, "announcements": announcements, "documents": documents, "results": results, "announcement_intel": intel, "alerts": alerts}
 
 
 def research_company(db: Session, ticker: str, months: int = 6, announcement_days: int = 30) -> dict:

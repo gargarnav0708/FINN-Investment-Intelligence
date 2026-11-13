@@ -58,7 +58,7 @@ def upgrade_schema(target_engine=engine) -> None:
     """Apply additive schema changes that create_all cannot make on an existing DB."""
     # New feature tables are created explicitly here as a migration-safe step;
     # the existing Day 1–3 tables and data are left untouched.
-    from .models import AlertEvent, AlertPreference, CommitmentAssessment, LLMCall, ManagementStatement, NarrativeAssessment, ResultsExtraction
+    from .models import AlertEvent, AlertPreference, AnnouncementInsight, CommitmentAssessment, CompanyInsight, LLMCall, ManagementStatement, NarrativeAssessment, ResultsExtraction
 
     AlertPreference.__table__.create(target_engine, checkfirst=True)
     AlertEvent.__table__.create(target_engine, checkfirst=True)
@@ -67,6 +67,8 @@ def upgrade_schema(target_engine=engine) -> None:
     LLMCall.__table__.create(target_engine, checkfirst=True)
     ResultsExtraction.__table__.create(target_engine, checkfirst=True)
     NarrativeAssessment.__table__.create(target_engine, checkfirst=True)
+    AnnouncementInsight.__table__.create(target_engine, checkfirst=True)
+    CompanyInsight.__table__.create(target_engine, checkfirst=True)
     inspector = inspect(target_engine)
     if "financial_observations" in inspector.get_table_names():
         columns = {column["name"] for column in inspector.get_columns("financial_observations")}

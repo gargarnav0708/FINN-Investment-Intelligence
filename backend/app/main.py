@@ -34,6 +34,7 @@ from .thesis_monitor import build_thesis_drift
 from . import llm
 from .guidance import assess_narrative, narrative_payload
 from .pipeline import deep_research, latest_results_record, process_portfolio_results
+from .announcement_intel import enrich_announcements
 from .results_extraction import headline_payload, results_context_for_announcement
 
 logger = logging.getLogger("uvicorn.error")
@@ -50,6 +51,8 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         if db.scalar(select(func.count(Company.id))) == 0:
             seed_companies(db)
+    from .scheduler import start_scheduler
+    start_scheduler(_last_refresh_started, _scheduled_refresh)
     yield
 
 
@@ -193,6 +196,16 @@ def assess_company_commitments(ticker: str, db: Session = Depends(get_db)) -> di
 def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
     company = _get_company(db, ticker)
     docs = db.scalars(select(SourceDocument).where(SourceDocument.company_id == company.id, SourceDocument.document_type == "annual_report").order_by(SourceDocument.fiscal_year.desc())).all()
+    from .models import CompanyInsight
+    snapshot = db.scalar(select(CompanyInsight).where(CompanyInsight.company_id == company.id, CompanyInsight.kind == "business_snapshot", CompanyInsight.status == "available"))
+    if snapshot and snapshot.payload.get("description"):
+        sp = snapshot.payload
+        return {"ticker": company.ticker, "status": "available", "message": None,
+                "facts": [{"text": sp["description"], "document_id": sp.get("document_id"), "document_title": sp.get("document_title"),
+                           "page_number": (sp.get("pages_read") or [None])[0], "source_url": sp.get("description_source_url")}],
+                "segments": [{"name": seg["name"], "what": seg.get("what"), "revenue_crore": seg.get("revenue_crore"), "share_pct": seg.get("share_pct"),
+                              "page_number": seg.get("page"), "source_url": seg.get("source_url")} for seg in sp.get("segments") or []],
+                "mix_note": sp.get("mix_note"), "fiscal_year": sp.get("fiscal_year"), "document_id": sp.get("document_id"), "document_title": sp.get("document_title")}
     screener_snapshot = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "screener"))
     screener_about = (screener_snapshot.details or {}).get("about") if screener_snapshot else None
     if company.ticker != "TATAPOWER" and screener_about:
@@ -354,7 +367,7 @@ def _run_refresh_job(job_id: int) -> None:
             return
         result = {}
         errors = []
-        for name, task in (("market", lambda: sync_market(db)), ("announcements", lambda: sync_announcements(db, lookback_days=30)), ("documents", lambda: discover_documents(db, "TATAPOWER", download=True)), ("results", lambda: process_portfolio_results(db, days=3))):
+        for name, task in (("market", lambda: sync_market(db)), ("announcements", lambda: sync_announcements(db, lookback_days=30)), ("documents", lambda: discover_documents(db, "TATAPOWER", download=True)), ("results", lambda: process_portfolio_results(db, days=3)), ("announcement_intel", lambda: enrich_announcements(db, days=7))):
             try:
                 result[name] = task()
                 if name in {"market", "announcements"} and result[name].get("status") in {"success", "partial"}:
@@ -369,6 +382,11 @@ def _run_refresh_job(job_id: int) -> None:
                 result[name] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
                 job.metadata_json = dict(result)
                 db.commit()
+        try:
+            result["alerts"] = evaluate_alerts(db)
+        except Exception as exc:
+            db.rollback()
+            errors.append(f"alerts: {type(exc).__name__}: {exc}")
         job.metadata_json = result
         job.error_summary = "\n".join(errors)[:12000] or None
         job.completed_at = datetime.now(timezone.utc)
@@ -376,6 +394,25 @@ def _run_refresh_job(job_id: int) -> None:
         job.records_attempted = sum(int(item.get("attempted", item.get("records", 0)) or 0) for item in result.values())
         job.records_failed = sum(int(item.get("failed", 0) or 0) for item in result.values())
         db.commit()
+
+
+def _last_refresh_started() -> datetime | None:
+    with SessionLocal() as db:
+        job = db.scalar(select(IngestionRun).where(IngestionRun.provider == "data_refresh").order_by(IngestionRun.started_at.desc()).limit(1))
+        if job is None or job.started_at is None:
+            return None
+        return job.started_at if job.started_at.tzinfo else job.started_at.replace(tzinfo=timezone.utc)
+
+
+def _scheduled_refresh() -> None:
+    with _refresh_launch_lock, SessionLocal() as db:
+        active = db.scalar(select(IngestionRun).where(IngestionRun.provider == "data_refresh", IngestionRun.status == "running").limit(1))
+        if active:
+            return
+        job = IngestionRun(provider="data_refresh", started_at=datetime.now(timezone.utc), status="running", metadata_json={"trigger": "scheduler"})
+        db.add(job); db.commit(); db.refresh(job)
+        job_id = job.id
+    _run_refresh_job(job_id)
 
 
 @app.post("/api/refresh", status_code=202)
@@ -1034,6 +1071,26 @@ def reassess_narrative(ticker: str, force: bool = True, db: Session = Depends(ge
     return narrative_payload(db, company)
 
 
+@app.get("/api/research/{ticker}/insights")
+def company_insights(ticker: str, db: Session = Depends(get_db)) -> dict:
+    from .company_insights import insights_payload
+    return insights_payload(db, _get_company(db, ticker))
+
+
+@app.post("/api/research/{ticker}/insights")
+def rebuild_company_insights(ticker: str, kind: str = Query("all", pattern="^(all|business_snapshot|bull_bear)$"), db: Session = Depends(get_db)) -> dict:
+    from .company_insights import build_bull_bear, build_business_snapshot, insights_payload
+    company = _get_company(db, ticker)
+    try:
+        if kind in {"all", "business_snapshot"}:
+            build_business_snapshot(db, company, force=True)
+        if kind in {"all", "bull_bear"}:
+            build_bull_bear(db, company, force=True)
+    except llm.LLMUnavailable as exc:
+        raise HTTPException(status_code=503, detail={"code": "llm_unavailable", "message": str(exc)}) from exc
+    return insights_payload(db, company)
+
+
 @app.get("/api/results/{ticker}/latest")
 def latest_results(ticker: str, db: Session = Depends(get_db)) -> dict:
     company = _get_company(db, ticker)
@@ -1041,6 +1098,18 @@ def latest_results(ticker: str, db: Session = Depends(get_db)) -> dict:
     if record is None:
         return {"ticker": company.ticker, "status": "unavailable", "message": "No results filing has been machine-read for this company yet."}
     return {"ticker": company.ticker, **headline_payload(db, record)}
+
+
+@app.post("/api/announcements/enrich")
+def enrich_announcement_feed(days: int = Query(7, ge=1, le=120), reclassify: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Classify portfolio announcements into the reference taxonomy, summarise material ones, profile people."""
+    return enrich_announcements(db, days=days, reclassify=reclassify)
+
+
+@app.post("/api/ask")
+def copilot_ask(payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    from .copilot import ask
+    return ask(db, str(payload.get("question") or ""), payload.get("ticker"), days=int(payload.get("days") or 14))
 
 
 @app.get("/api/llm/usage")

@@ -141,12 +141,20 @@ def _results_announcements(db: Session, company: Company, days: int) -> list[Ann
                 continue
         text = f"{item.subject} {item.details or ''}".lower()
         from .intelligence import keyword_category
-        if classify_announcement(item)["category"] != "results" and keyword_category(item) != "results" and "financial result" not in text:
+        nse_category = (item.original_category or "").lower()
+        candidate = (classify_announcement(item)["category"] == "results" or keyword_category(item) == "results"
+                     or "financial result" in text or "result" in nse_category or "outcome of board meeting" in text)
+        # Board-meeting outcomes without results are harmless here: no statement page is found and no model call is made.
+        if not candidate:
             continue
         if any(term in text for term in ("newspaper", "publication", "intimation of board meeting", "prior intimation", "trading window")):
             continue
-        picked.append(item)
-    return picked
+        strong = (classify_announcement(item)["category"] == "results" or keyword_category(item) == "results"
+                  or "financial result" in text or "result" in nse_category)
+        picked.append((0 if strong else 1, item))
+    # Clear results filings first (newest first), generic board-meeting outcomes after them.
+    picked.sort(key=lambda pair: pair[0])
+    return [item for _, item in picked]
 
 
 def process_results(db: Session, company: Company, days: int = 120, limit: int = 3, progress: Progress = _noop) -> dict:

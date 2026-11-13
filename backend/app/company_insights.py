@@ -22,7 +22,7 @@ from .models import Company, CompanyInsight, DocumentPage, SourceDocument
 from .results_extraction import _canon, _number_tokens
 
 SNAPSHOT_VERSION = "business-snapshot-v1"
-BULLBEAR_VERSION = "bull-bear-v1"
+BULLBEAR_VERSION = "bull-bear-v2"
 
 SNAPSHOT_SYSTEM = """You summarise an Indian listed company's business from its own annual report.
 Use ONLY the pages given. Return ONLY JSON."""
@@ -55,7 +55,8 @@ EXCERPTS:
 Return {{"bull": [{{"point": "<max 22 words>", "quote": "<verbatim>", "doc": <doc id>, "page": <page>}}],
          "bear": [ ...same... ],
          "verdict": "<one sentence on what decides between the two cases>"}}
-Exactly 3 bull and 3 bear points, the strongest first."""
+4 bull and 4 bear points, the strongest first. The quote must be copied character-for-character from the
+excerpt marked with that doc id and page (it will be checked automatically)."""
 
 UNIT_TO_CRORE = {"crore": 1.0, "lakh": 0.01, "million": 0.1}
 BULL_TERMS = ("growth", "grew", "expand", "demand", "order book", "pipeline", "market share", "margin improvement", "record", "capacity",
@@ -196,7 +197,7 @@ def build_bull_bear(db: Session, company: Company, force: bool = False) -> dict:
     titles = {e["doc"]: e["title"] for e in excerpts}
     out, dropped = {"bull": [], "bear": []}, 0
     for side in ("bull", "bear"):
-        for item in (reply.get(side) or [])[:4]:
+        for item in (reply.get(side) or [])[:5]:
             try:
                 doc = int(item.get("doc"))
                 hint = int(item.get("page")) if item.get("page") is not None else None

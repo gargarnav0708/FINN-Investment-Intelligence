@@ -28,7 +28,7 @@ from .models import (CommitmentAssessment, Company, DocumentPage, FinancialObser
                      NarrativeAssessment, ProviderFinancialObservation, SourceDocument)
 
 EXTRACT_VERSION = "guidance-extract-v1"
-ASSESS_VERSION = "narrative-assess-v2"
+ASSESS_VERSION = "narrative-assess-v3"
 PARSER_VERSION = "llm-guidance-v1"
 METRICS = ("revenue_growth", "revenue", "ebitda_margin", "ebitda", "ebitda_growth", "pat", "pat_growth", "pat_margin",
            "capex", "volume_growth", "order_book", "order_inflow", "net_debt", "dividend", "capacity", "market_share",
@@ -91,7 +91,7 @@ GUIDANCE (id, said on, speaker, quote, parsed target):
 DELIVERED (INR crore unless the key ends in _pct; growth keys are YoY %):
 {table}
 
-Return JSON:
+Return one item for EVERY guidance id listed above. JSON:
 {{
  "items": [{{"id": <guidance id>, "verdict": "delivered"|"exceeded"|"missed"|"partly"|"pending"|"not_measurable",
             "actual": "<what actually happened, <=20 words, with numbers>",
@@ -323,11 +323,12 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
     # Most decision-relevant first: quantified targets, then most recent.
     statements.sort(key=lambda s: (s.target_low is None, -(s.transcript_date.toordinal() if s.transcript_date else 0), s.id))
     budget = llm.input_budget("strong")
-    limit = 40
+    statements = statements[:40]
+    chunk_size = 40
     if budget:
+        # Small-budget provider (Groq free): judge statements in batches so every one gets a verdict.
         fixed = llm.estimate_tokens(ASSESS_SYSTEM + ASSESS_USER + _table_text(table)) + 200
-        limit = max(6, min(40, (budget - fixed) // 105))
-    statements = statements[:limit]
+        chunk_size = max(4, min(8, (budget - fixed) // 110))
     record = db.scalar(select(NarrativeAssessment).where(NarrativeAssessment.company_id == company.id))
     if not statements:
         payload = {"status": "no_guidance", "message": "No grounded guidance statements are indexed for this company yet.", "delivered": table}
@@ -346,13 +347,32 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
     input_hash = hashlib.sha256((guidance_text + table_text).encode()).hexdigest()
     if record and record.input_hash == input_hash and record.status == "available" and not force:
         return record.payload
-    result, meta = llm.complete_json(db, tier="strong", purpose="narrative_assess", prompt_version=ASSESS_VERSION,
-                                     system=ASSESS_SYSTEM, max_tokens=12000,
-                                     user=ASSESS_USER.format(company=company.name, ticker=company.ticker,
-                                                             latest=table.get("latest_quarter") or "unknown",
-                                                             latest_year=(table["annual"][-1]["period"] if table.get("annual") else "unknown"),
-                                                             today=date.today().isoformat(),
-                                                             guidance=guidance_text, table=table_text))
+    lines = guidance_text.split("\n")
+    chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
+    result, meta, items = {}, {}, []
+    for chunk in chunks:
+        result, meta = llm.complete_json(db, tier="strong", purpose="narrative_assess", prompt_version=ASSESS_VERSION,
+                                         system=ASSESS_SYSTEM, max_tokens=12000,
+                                         user=ASSESS_USER.format(company=company.name, ticker=company.ticker,
+                                                                 latest=table.get("latest_quarter") or "unknown",
+                                                                 latest_year=(table["annual"][-1]["period"] if table.get("annual") else "unknown"),
+                                                                 today=date.today().isoformat(),
+                                                                 guidance="\n".join(chunk), table=table_text))
+        items.extend(result.get("items") or [])
+    scorecard = result.get("scorecard") or {}
+    if len(chunks) > 1:
+        # One more small call so the scorecard reflects every verdict, not just the last batch.
+        summary = "\n".join(f"[{i.get('id')}] {i.get('verdict')}: {str(i.get('actual') or '')[:120]}" for i in items)
+        try:
+            sc, _ = llm.complete_json(db, tier="strong", purpose="narrative_scorecard", prompt_version=ASSESS_VERSION, max_tokens=1200,
+                                      system="You summarise how reliably a company's management delivered on its guidance. Return ONLY JSON.",
+                                      user=f"Company: {company.name}. Verdicts on management guidance (id, verdict, what happened):\n{summary}\n\n"
+                                           'Return {"scorecard": {"credibility": "high"|"mixed"|"low"|"insufficient_evidence", "headline": "<one sentence>", '
+                                           '"pattern": "<one sentence or null>", "watch_next": "<max 20 words>"}}')
+            scorecard = sc.get("scorecard") or scorecard
+        except llm.LLMUnavailable:
+            pass
+    result = {"items": items, "scorecard": scorecard}
     by_id = {s.id: s for s in statements}
     verdicts = []
     for item in result.get("items") or []:

@@ -420,3 +420,31 @@ def test_groq_strong_tier_budgets_and_degrades_when_too_large(db, monkeypatch):
     result, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user=big)
     assert meta["degraded_from"] == "openai/gpt-oss-120b" and "per-request budget" in meta["degraded_reason"]
     assert sent[-1][0] == "gemini-3.5-flash-lite"
+
+
+def test_assessment_is_batched_on_small_budget_provider(db, monkeypatch):
+    monkeypatch.setenv("FINN_LLM_STRONG_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("FINN_LLM_STRONG_API_KEY", "gsk-test")
+    company = _company(db)
+    doc = _transcript(db, company)
+    for i in range(14):
+        db.add(ManagementStatement(evidence_key=f"k{i}", company_id=company.id, document_id=doc.id, document_type="earnings_call_transcript",
+                                   transcript_date=date(2026, 10, 28), speaker="CFO", page_number=3, exact_quote=f"We expect growth of {i}% next year",
+                                   surrounding_context="x", statement_class="quantitative_guidance", lifecycle="original", topic="growth",
+                                   metric_name="revenue_growth", target_low=float(i), parser_version=guidance.PARSER_VERSION,
+                                   extraction_status="grounded", review_status="approved"))
+    db.commit()
+    calls = []
+
+    def fake(db_, **kw):
+        calls.append(kw["purpose"])
+        if kw["purpose"] == "narrative_scorecard":
+            return {"scorecard": {"credibility": "mixed", "headline": "All judged."}}, {"model": "gpt-oss"}
+        ids = [int(line[1:line.index("]")]) for line in kw["user"].split("GUIDANCE")[1].splitlines() if line.startswith("[")]
+        return {"items": [{"id": i, "verdict": "pending", "actual": "-", "explanation": "-", "numbers_used": []} for i in ids],
+                "scorecard": {"headline": "partial"}}, {"model": "gpt-oss"}
+
+    monkeypatch.setattr(llm, "complete_json", fake)
+    payload = guidance.assess_narrative(db, company, force=True)
+    assert calls.count("narrative_assess") >= 2 and calls[-1] == "narrative_scorecard"
+    assert payload["counts"] == {"pending": 14} and payload["scorecard"]["headline"] == "All judged."

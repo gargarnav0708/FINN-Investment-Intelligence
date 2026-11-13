@@ -62,6 +62,42 @@ class DailyMarketData(Base):
     company: Mapped[Company] = relationship(back_populates="market_data")
 
 
+class ProviderFinancialObservation(Base):
+    """Structured financial data from a market-data provider, kept separate from filing evidence."""
+    __tablename__ = "provider_financial_observations"
+    __table_args__ = (UniqueConstraint("company_id", "statement_type", "period_type", "period_end", "canonical_metric", name="uq_provider_financial_period_metric"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    statement_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    fiscal_year: Mapped[str] = mapped_column(String(24), nullable=False)
+    fiscal_quarter: Mapped[str | None] = mapped_column(String(8))
+    canonical_metric: Mapped[str] = mapped_column(String(48), nullable=False)
+    reported_label: Mapped[str] = mapped_column(Text, nullable=False)
+    reported_value: Mapped[Decimal] = mapped_column(Numeric(24, 4), nullable=False)
+    currency: Mapped[str | None] = mapped_column(String(8))
+    reported_unit: Mapped[str] = mapped_column(String(40), default="provider reported", nullable=False)
+    normalised_value_in_crore: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    provider: Mapped[str] = mapped_column(String(60), default="Yahoo Finance via yfinance", nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(1000))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ResearchDatasetSnapshot(Base):
+    __tablename__ = "research_dataset_snapshots"
+    __table_args__ = (UniqueConstraint("company_id", "dataset", name="uq_research_dataset_company"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    dataset: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(60), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
 class Announcement(Base):
     __tablename__ = "announcements"
     __table_args__ = (UniqueConstraint("dedupe_key", name="uq_announcement_dedupe"), Index("ix_announcement_date", "announcement_datetime"), Index("ix_announcement_company_date", "company_id", "announcement_datetime"))

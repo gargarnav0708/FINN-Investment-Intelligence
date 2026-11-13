@@ -5,12 +5,12 @@ FINN is an evidence-first investment research desk for an Indian-equity portfoli
 ## What it does
 
 - **Today:** View the tracked portfolio, market summaries, recent NSE announcements, a daily digest, and configured alerts. Refresh starts background jobs to fetch available market, announcement, and Tata Power document data.
-- **Research:** Search the company universe and inspect company overviews, financial history, primary documents, and management commitments with source-page links.
+- **Research:** Search the company universe and inspect company overviews, financial history, primary documents, and management commitments with source-page links. Listed companies can also be searched and registered on demand through Yahoo Finance listings for NSE (`.NS`) and BSE (`.BO`).
 - **Evidence review:** Index registered PDFs and extract financial and management-statement candidates. Extracted financial figures require analyst validation before they appear as verified research data.
 - **Thesis Drift:** Compare validated financial observations and available primary disclosures over time; unavailable evidence is shown as a coverage limitation rather than an implied conclusion.
 - **Research questions:** Answer supported questions from validated data and citations. Optional model-backed retrieval is disabled unless an OpenAI-compatible provider is configured.
 
-The starter portfolio has 18 companies. Live market history comes from Yahoo Finance, announcements from NSE, and primary-document discovery currently focuses on Tata Power. Data availability depends on the external providers. The app does not provide intraday prices, BSE announcements, or complete document coverage for every company.
+The starter portfolio has 18 companies. Live market history comes from Yahoo Finance; NSE announcements and linked filing PDFs are fetched on demand for NSE listings. Yahoo financial statements are cached separately from filing observations and are labeled provider sourced, with consolidated or standalone basis shown as uncertain. Original investor-relations document discovery still has issuer-specific adapters for Tata Power, BEL, and Infosys. Data availability depends on the external providers. The app does not provide intraday prices, BSE announcements, or complete document coverage for every company.
 
 ## Requirements
 

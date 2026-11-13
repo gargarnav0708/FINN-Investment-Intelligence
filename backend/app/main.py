@@ -19,11 +19,13 @@ from sqlalchemy.orm import Session
 
 from .database import Base, DATABASE_IDENTIFIER, PROJECT_ROOT, SessionLocal, engine, get_db, upgrade_schema
 from .models import (AlertEvent, AlertPreference, Announcement, Company, DailyMarketData, DocumentExtractionRun, DocumentPage,
-                     FinancialObservation, IngestionRun, PortfolioHolding, SourceDocument, ManagementStatement, CommitmentAssessment)
+                     FinancialObservation, IngestionRun, PortfolioHolding, SourceDocument, ManagementStatement, CommitmentAssessment,
+                     ProviderFinancialObservation, ResearchDatasetSnapshot)
 from .research import PARSER_VERSION, calculate_comparison, registered_pdf_path, sha256_file
 from .intelligence import (ALERT_CATEGORIES, alert_event_payload, alert_preferences_payload,
                            classify_announcement, digest_bounds, evaluate_alerts, get_alert_preferences)
-from .services import discover_documents, research_company, sync_announcements, sync_market
+from .services import discover_documents, research_company, refresh_company_research, sync_announcements, sync_market
+from .providers.yahoo_research import search_listed_companies, exchange_symbol, validate_symbol
 from .schemas import (DocumentPagesResponse, ExtractionStatusResponse, FinancialHeadlineResponse,
                       FinancialHistoryResponse, FinancialObservationResponse)
 from .seed import seed_companies
@@ -185,7 +187,11 @@ def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
     company = _get_company(db, ticker)
     docs = db.scalars(select(SourceDocument).where(SourceDocument.company_id == company.id, SourceDocument.document_type == "annual_report").order_by(SourceDocument.fiscal_year.desc())).all()
     if not docs:
-        return {"ticker": company.ticker, "status": "unavailable", "message": "No official annual report is connected for this issuer.", "facts": [], "segments": []}
+        cached = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "profile"))
+        profile = (cached.details or {}) if cached and cached.status in {"available", "partially_available"} else {}
+        if profile.get("business"):
+            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
+        return {"ticker": company.ticker, "status": "unavailable", "message": "No indexed official profile is available. Provider profile coverage will be checked on demand.", "facts": [], "segments": []}
     document = docs[0]
     pages = {p.page_number: p for p in db.scalars(select(DocumentPage).where(DocumentPage.document_id == document.id, DocumentPage.page_number.in_([5, 6, 7]))).all()}
     facts = []
@@ -201,6 +207,11 @@ def company_profile(ticker: str, db: Session = Depends(get_db)) -> dict:
     if page6:
         normalized = " ".join(page6.extracted_text.split()).lower()
         segments = [{"name": name, "document_id": document.id, "document_title": document.title, "page_number": 6, "source_url": f"/api/documents/{document.id}/file#page=6"} for name in segment_names if name.lower() in normalized]
+    if not facts:
+        cached = db.scalar(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id, ResearchDatasetSnapshot.dataset == "profile"))
+        profile = (cached.details or {}) if cached and cached.status in {"available", "partially_available"} else {}
+        if profile.get("business"):
+            return {"ticker": company.ticker, "status": "provider_available", "message": "Yahoo Finance business description; not an original company filing.", "facts": [{"text": profile["business"], "provider": profile.get("provider"), "retrieved_at": cached.fetched_at.isoformat() if cached.fetched_at else None}], "segments": [], "provider": profile.get("provider"), "website": profile.get("website")}
     return {"ticker": company.ticker, "status": "available" if facts else "unavailable", "message": None if facts else "The annual report is indexed, but a business profile passage was not extracted.", "facts": facts, "segments": segments, "document_id": document.id, "document_title": document.title}
 
 
@@ -213,7 +224,7 @@ def research_coverage(ticker: str, db: Session = Depends(get_db)) -> dict:
     pages_by_doc = {d.id: db.scalar(select(func.count(DocumentPage.id)).where(DocumentPage.document_id == d.id)) or 0 for d in docs}
     validated = [o for o in obs if o.extraction_status == "validated"]
     review = [o for o in obs if o.extraction_status == "needs_review"]
-    provider_configured = company.ticker in {"TATAPOWER", "BEL", "INFY"}
+    provider_configured = company.ticker.split(":")[-1] in {"TATAPOWER", "BEL", "INFY"}
 
     def source_state(items, configured=True):
         if items:
@@ -238,9 +249,13 @@ def research_coverage(ticker: str, db: Session = Depends(get_db)) -> dict:
         return run.status if run else ("not_connected" if provider else "not_configured")
     market_count = db.scalar(select(func.count(DailyMarketData.id)).where(DailyMarketData.company_id == company.id)) or 0
     ann_count = db.scalar(select(func.count(Announcement.id)).where(Announcement.company_id == company.id)) or 0
-    market = "available" if market_count else ("provider_error" if provider_status("yahoo_finance") == "failed" else "not_connected")
-    announcements = "available" if ann_count else ("provider_error" if provider_status("nse_announcements") == "failed" else "not_connected")
-    profile = "available" if company.ticker == "TATAPOWER" and annual and any(pages_by_doc.get(d.id, 0) for d in annual) else ("indexed_not_extracted" if annual and any(pages_by_doc.get(d.id, 0) for d in annual) else "not_connected" if provider_configured else "not_configured")
+    snapshots = {item.dataset: item for item in db.scalars(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id)).all()}
+    market = "available" if market_count else ("provider_error" if snapshots.get("market") and snapshots["market"].status == "provider_error" else "not_connected")
+    announcements = "available" if ann_count else (snapshots["announcements"].status if snapshots.get("announcements") else ("provider_error" if provider_status("nse_announcements") == "failed" else "not_connected"))
+    profile_result = company_profile(company.ticker, db)
+    profile = {"available": "available", "provider_available": "partially_available"}.get(profile_result.get("status"))
+    if profile is None:
+        profile = "provider_error" if snapshots.get("profile") and snapshots["profile"].status == "provider_error" else "indexed_not_extracted" if annual and any(pages_by_doc.get(d.id, 0) for d in annual) else "not_connected" if provider_configured else "not_configured"
     valid_mgmt = db.scalar(select(func.count(ManagementStatement.id)).where(ManagementStatement.company_id == company.id, ManagementStatement.review_status == "approved")) or 0
     mgmt_count = db.scalar(select(func.count(ManagementStatement.id)).where(ManagementStatement.company_id == company.id)) or 0
     categories = {
@@ -250,11 +265,12 @@ def research_coverage(ticker: str, db: Session = Depends(get_db)) -> dict:
         "earnings_call_transcripts": source_state(transcripts, company.ticker == "TATAPOWER"),
         "indexed_document_pages": "available" if sum(pages_by_doc.values()) else ("documents_registered" if docs else "not_connected" if provider_configured else "not_configured"),
         "validated_financial_observations": "available" if validated else "needs_review" if review else "indexed_not_extracted" if any(pages_by_doc.values()) else "not_connected" if provider_configured else "not_configured",
+        "provider_financial_statements": snapshots["financials"].status if snapshots.get("financials") else "not_connected",
         "management_statements_and_commitments": "available" if valid_mgmt else "needs_review" if mgmt_count else "not_connected" if transcripts else "not_configured",
     }
     return {"ticker": company.ticker, "company": company.name, "states": categories,
-            "counts": {"market_observations": market_count, "announcements": ann_count, "annual_reports": len(annual), "quarterly_results": len(quarterly), "transcripts": len(transcripts), "indexed_pages": sum(pages_by_doc.values()), "financial_observations": len(obs), "validated_financial_observations": len(validated), "financial_observations_needing_review": len(review), "management_statements": mgmt_count, "approved_management_statements": valid_mgmt},
-            "providers": {"market": provider_status("yahoo_finance"), "announcements": provider_status("nse_announcements"), "documents": provider_status({"TATAPOWER":"tata_power_ir", "BEL":"bel_ir", "INFY":"infosys_ir"}.get(company.ticker, "")) if provider_configured else "not_configured"}}
+            "counts": {"market_observations": market_count, "announcements": ann_count, "annual_reports": len(annual), "quarterly_results": len(quarterly), "transcripts": len(transcripts), "indexed_pages": sum(pages_by_doc.values()), "financial_observations": len(obs), "validated_financial_observations": len(validated), "financial_observations_needing_review": len(review), "provider_financial_observations": db.scalar(select(func.count(ProviderFinancialObservation.id)).where(ProviderFinancialObservation.company_id == company.id)) or 0, "management_statements": mgmt_count, "approved_management_statements": valid_mgmt},
+            "providers": {"market": snapshots["market"].status if snapshots.get("market") else provider_status("yahoo_finance"), "announcements": snapshots["announcements"].status if snapshots.get("announcements") else provider_status("nse_announcements"), "documents": provider_status({"TATAPOWER":"tata_power_ir", "BEL":"bel_ir", "INFY":"infosys_ir"}.get(company.ticker.split(":")[-1], "")) if provider_configured else "not_configured"}}
 
 
 @app.get("/api/health")
@@ -580,6 +596,59 @@ def research_universe(db: Session = Depends(get_db)) -> dict:
     return {"count": len(rows), "items": [{**_company_payload(c), "portfolio_member": False, "market_summary": _market_summary(db, c), "document_count": db.scalar(select(func.count(SourceDocument.id)).where(SourceDocument.company_id == c.id)) or 0} for c in rows]}
 
 
+@app.get("/api/company-search")
+def company_search(q: str = Query(..., min_length=2, max_length=100)) -> dict:
+    try:
+        return {"query": q, "items": search_listed_companies(q)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"code": "search_provider_error", "message": f"Company search is unavailable ({type(exc).__name__})."}) from exc
+
+
+@app.post("/api/research-company")
+def register_research_company(payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    exchange = str(payload.get("exchange", "")).upper()
+    ticker = str(payload.get("ticker", "")).strip().upper()
+    name = str(payload.get("name", "")).strip()
+    try:
+        symbol = exchange_symbol(exchange, ticker)
+        identity = validate_symbol(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "ticker_unavailable", "message": str(exc)}) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"code": "provider_unavailable", "message": f"Yahoo Finance validation failed ({type(exc).__name__})."}) from exc
+    resolved_name = identity.get("name") or name
+    if name and name.casefold() != ticker.casefold() and resolved_name and name.casefold() not in resolved_name.casefold() and resolved_name.casefold() not in name.casefold():
+        raise HTTPException(status_code=422, detail={"code": "identity_mismatch", "message": "The provider name does not match the selected search result."})
+    storage_ticker = ticker if exchange == "NSE" else f"BSE:{ticker}"
+    company = db.scalar(select(Company).where(Company.ticker == storage_ticker)) or db.scalar(select(Company).where(Company.yfinance_symbol == symbol))
+    if company is None:
+        company = Company(name=resolved_name or ticker, ticker=storage_ticker, exchange=exchange, sector=identity.get("sector"), yfinance_symbol=symbol, website=identity.get("website"))
+        db.add(company); db.commit(); db.refresh(company)
+    elif company.yfinance_symbol != symbol:
+        raise HTTPException(status_code=409, detail={"code": "symbol_conflict", "message": "This exchange symbol is already registered to a different provider symbol."})
+    refresh = refresh_company_research(db, company)
+    return {**_company_payload(company), "provider_identity": resolved_name, "refresh": refresh}
+
+
+@app.post("/api/research/{ticker}/refresh")
+def refresh_research_endpoint(ticker: str, db: Session = Depends(get_db)) -> dict:
+    return refresh_company_research(db, _get_company(db, ticker))
+
+
+@app.get("/api/provider-financials/{ticker}")
+def provider_financials(ticker: str, statement_type: str | None = Query(None, pattern="^(income|balance_sheet|cash_flow)$"), period_type: str | None = Query(None, pattern="^(annual|quarterly)$"), db: Session = Depends(get_db)) -> dict:
+    company = _get_company(db, ticker)
+    query = select(ProviderFinancialObservation).where(ProviderFinancialObservation.company_id == company.id)
+    if statement_type:
+        query = query.where(ProviderFinancialObservation.statement_type == statement_type)
+    if period_type:
+        query = query.where(ProviderFinancialObservation.period_type == period_type)
+    rows = db.scalars(query.order_by(ProviderFinancialObservation.period_end, ProviderFinancialObservation.id)).all()
+    snapshots = db.scalars(select(ResearchDatasetSnapshot).where(ResearchDatasetSnapshot.company_id == company.id)).all()
+    statuses = {row.dataset: {"status": row.status, "fetched_at": row.fetched_at.isoformat(), "error": row.error} for row in snapshots}
+    return {"ticker": company.ticker, "company": company.name, "provider": "Yahoo Finance via yfinance", "basis": "provider reported; consolidated or standalone basis is not guaranteed", "data_status": statuses, "items": [{"statement_type": row.statement_type, "period_type": row.period_type, "period_end": row.period_end.isoformat(), "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter, "canonical_metric": row.canonical_metric, "reported_label": row.reported_label, "reported_value": float(row.reported_value), "currency": row.currency, "reported_unit": row.reported_unit, "normalised_value_in_crore": float(row.normalised_value_in_crore) if row.normalised_value_in_crore is not None else None, "provider": row.provider, "source_url": row.source_url, "fetched_at": row.fetched_at.isoformat()} for row in rows]}
+
+
 @app.post("/api/research-universe/{ticker}")
 def add_research_company(ticker: str, db: Session = Depends(get_db)) -> dict:
     try:
@@ -588,6 +657,9 @@ def add_research_company(ticker: str, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=422, detail={"code": "ticker_unavailable", "message": str(exc)}) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail={"code": "provider_unavailable", "message": f"Could not retrieve research data for {ticker.upper()}: {type(exc).__name__}"}) from exc
+    company = db.scalar(select(Company).where(Company.ticker == ticker.upper()))
+    if company:
+        result["financial_research"] = refresh_company_research(db, company)
     return result
 
 

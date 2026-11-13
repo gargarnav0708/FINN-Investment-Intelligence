@@ -176,10 +176,16 @@ def _excerpt_pool(db: Session, company: Company, max_pages: int = 22, per_page: 
 
 
 def build_bull_bear(db: Session, company: Company, force: bool = False) -> dict:
-    excerpts, texts = _excerpt_pool(db, company)
+    table = delivered_table(db, company)
+    budget = llm.input_budget("strong")
+    if budget:
+        room_chars = int((budget - llm.estimate_tokens(BULLBEAR_SYSTEM + BULLBEAR_USER + _table_text(table)) - 150) * 3.6)
+        per_page = 1500
+        excerpts, texts = _excerpt_pool(db, company, max_pages=max(4, min(22, room_chars // (per_page + 90))), per_page=per_page)
+    else:
+        excerpts, texts = _excerpt_pool(db, company)
     if len(excerpts) < 3:
         return _upsert(db, company, "bull_bear", "unavailable", {"message": "Not enough indexed annual-report or transcript pages for a grounded bull/bear case."}, None, None)
-    table = delivered_table(db, company)
     excerpt_text = "\n\n".join(f"<<doc {e['doc']} | {e['title']} | page {e['page']}>>\n{e['text']}" for e in excerpts)
     input_hash = hashlib.sha256((BULLBEAR_VERSION + excerpt_text + _table_text(table)).encode()).hexdigest()
     existing = db.scalar(select(CompanyInsight).where(CompanyInsight.company_id == company.id, CompanyInsight.kind == "bull_bear"))

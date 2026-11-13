@@ -106,6 +106,8 @@ These run for **any NSE ticker** (not only the demo set), from primary sources:
 | Guidance | Last 4 concall transcripts, full text with page markers | fast, one call per transcript | Quotes must be verbatim on the cited page (or are re-paged / dropped). Speakers are identified from the transcript; nothing is hard-coded per company. |
 | Promised vs delivered | Grounded guidance + delivered table only | strong (Flash), one call per company | Every number the model cites is checked against the table; mismatches downgrade the verdict to *unverified*. |
 
+**Free model setup (default recommendation):** the fast tier runs on Google Gemini Flash-Lite (long documents, large free quota); the strong tier runs on Groq `gpt-oss-120b` (free, fast, but ~8k tokens/minute, so FINN sizes the assessment and bull/bear prompts to fit and falls back to Gemini if Groq is busy). Each tier can point at any OpenAI-compatible provider via `FINN_LLM_<TIER>_BASE_URL / _API_KEY / _MODEL`.
+
 Model calls go through `backend/app/llm.py`: two tiers, client-side rate pacing, retry on 429, automatic fallback from the strong to the fast tier when the free quota runs out, and a persistent cache keyed by model + prompt version + input hash (a filing or transcript is read once, ever). `GET /api/llm/usage` (or `python -m backend.app.cli llm-usage`) shows calls, cache hits and tokens by purpose.
 
 In the app: **Research → pick or search any company → Commitments → "Read last 4 concalls + results"**. The job runs in the background (`POST /api/research/{ticker}/deep`, poll `GET /api/research-jobs/{id}`). Results filings in the portfolio digest are machine-read during **Refresh**.

@@ -54,6 +54,8 @@ class TierConfig:
     rpm: float
     reasoning_effort: str | None = None
     fallbacks: tuple[str, ...] = ()
+    max_input_tokens: int = 0
+    max_output_tokens: int = 0
 
 
 def _env(name: str, default: str = "") -> str:
@@ -61,26 +63,50 @@ def _env(name: str, default: str = "") -> str:
 
 
 def tier_config(tier: str) -> TierConfig | None:
-    key = _env("FINN_LLM_API_KEY") or _env("GEMINI_API_KEY")
-    base = (_env("FINN_LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-    if tier == "fast":
-        model = _env("FINN_LLM_FAST_MODEL") or _env("FINN_LLM_MODEL") or "gemini-3.5-flash-lite"
-        rpm = float(_env("FINN_LLM_FAST_RPM") or 12)
-    elif tier == "strong":
-        model = _env("FINN_LLM_STRONG_MODEL") or _env("FINN_LLM_MODEL") or "gemini-3.8-flash"
-        rpm = float(_env("FINN_LLM_STRONG_RPM") or 8)
-    else:
+    """Each tier can point at its own provider: FINN_LLM_<TIER>_BASE_URL / _API_KEY override the shared ones.
+
+    Typical free setup: fast tier on Gemini (long documents, generous free quota), strong tier on Groq
+    (gpt-oss-120b; fast, free, but ~8k tokens/minute, so inputs are sized to fit).
+    """
+    if tier not in {"fast", "strong"}:
         raise ValueError(f"Unknown model tier: {tier}")
-    if not key:
+    up = tier.upper()
+    key = _env(f"FINN_LLM_{up}_API_KEY") or _env("FINN_LLM_API_KEY") or _env("GEMINI_API_KEY")
+    base = (_env(f"FINN_LLM_{up}_BASE_URL") or _env("FINN_LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    gemini, groq = "googleapis.com" in base, "groq.com" in base
+    defaults = {
+        ("fast", "gemini"): ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite,gemini-flash-lite-latest", "none", 12),
+        ("strong", "gemini"): ("gemini-3.8-flash", "gemini-3.7-flash,gemini-flash-latest", "low", 8),
+        ("fast", "groq"): ("openai/gpt-oss-20b", "", "low", 25),
+        ("strong", "groq"): ("openai/gpt-oss-120b", "", "low", 20),
+    }
+    kind = "gemini" if gemini else "groq" if groq else "other"
+    d_model, d_fallbacks, d_effort, d_rpm = defaults.get((tier, kind), ("", "", "", 10))
+    model = _env(f"FINN_LLM_{up}_MODEL") or _env("FINN_LLM_MODEL") or d_model
+    if not key or not model:
         return None
-    # Gemini 2.5 "thinking" tokens count against max_tokens; keep it low on the reasoning tier and
-    # off for bulk extraction. Only sent to Gemini unless set explicitly.
-    effort = _env(f"FINN_LLM_{tier.upper()}_REASONING_EFFORT") or (
-        ("low" if tier == "strong" else "none") if "googleapis.com" in base else "")
-    default_fallbacks = {"fast": "gemini-3.1-flash-lite,gemini-flash-lite-latest", "strong": "gemini-3.7-flash,gemini-flash-latest"}
-    raw = _env(f"FINN_LLM_{tier.upper()}_FALLBACKS") or (default_fallbacks[tier] if "googleapis.com" in base else "")
+    rpm = float(_env(f"FINN_LLM_{up}_RPM") or d_rpm)
+    effort = _env(f"FINN_LLM_{up}_REASONING_EFFORT") or d_effort
+    raw = _env(f"FINN_LLM_{up}_FALLBACKS") or d_fallbacks
     fallbacks = tuple(m.strip() for m in raw.split(",") if m.strip() and m.strip() != model)
-    return TierConfig(tier=tier, model=model, base_url=base, api_key=key, rpm=max(rpm, 0.1), reasoning_effort=effort or None, fallbacks=fallbacks)
+    # Per-request token budget. Groq's free plan allows ~8k tokens/minute per model, and a single
+    # request larger than that is rejected, so prompts are sized to fit (see input_budget()).
+    max_in = int(_env(f"FINN_LLM_{up}_MAX_INPUT_TOKENS") or (5200 if groq else 0))
+    max_out = int(_env(f"FINN_LLM_{up}_MAX_OUTPUT_TOKENS") or (2600 if groq else 0))
+    return TierConfig(tier=tier, model=model, base_url=base, api_key=key, rpm=max(rpm, 0.1), reasoning_effort=effort or None,
+                      fallbacks=fallbacks, max_input_tokens=max_in, max_output_tokens=max_out)
+
+
+def estimate_tokens(text: str) -> int:
+    return int(len(text) / 3.6) + 1
+
+
+def input_budget(tier: str) -> int | None:
+    """Tokens of document context a caller may send to this tier (None = effectively unlimited)."""
+    config = tier_config(tier)
+    if config is None or not config.max_input_tokens:
+        return None
+    return config.max_input_tokens
 
 
 def is_configured() -> bool:
@@ -208,6 +234,11 @@ def complete_json(
     else:
         content = user
     messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    if config.max_output_tokens:
+        max_tokens = min(max_tokens, config.max_output_tokens)
+    if images and "groq.com" in config.base_url:
+        messages[1]["content"] = user  # text-only models: the page text is already in the prompt
+    too_large = bool(config.max_input_tokens) and estimate_tokens(system + user) > config.max_input_tokens
     started = time.monotonic()
     db.commit()  # never hold a SQLite lock across a slow network call
     errors: list[str] = []
@@ -217,6 +248,9 @@ def complete_json(
         timeout = max(timeout, 240)  # reasoning models think before answering
     rounds = max(1, int(_env("FINN_LLM_ROUNDS") or 3))
     chain = [m for r in range(rounds) for m in (config.model, *config.fallbacks)]
+    if too_large:
+        errors.append(f"{config.model}: request (~{estimate_tokens(system + user)} tokens) exceeds this provider's per-request budget ({config.max_input_tokens})")
+        chain = []
     for attempt_index, model in enumerate(chain):
         if attempt_index and attempt_index % (1 + len(config.fallbacks)) == 0:
             # Every model failed this round. Wait out a transient overload (503 / timeouts),

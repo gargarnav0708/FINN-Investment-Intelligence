@@ -398,3 +398,25 @@ def test_overload_waits_and_retries_the_chain_but_not_on_quota(db, monkeypatch):
     with pytest.raises(llm.LLMUnavailable):
         llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="quota-only")
     assert sleeps == []  # exhausted quota is not waited out
+
+
+def test_groq_strong_tier_budgets_and_degrades_when_too_large(db, monkeypatch):
+    monkeypatch.setenv("FINN_LLM_STRONG_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("FINN_LLM_STRONG_API_KEY", "gsk-test")
+    monkeypatch.delenv("FINN_LLM_STRONG_MODEL", raising=False)
+    strong, fast = llm.tier_config("strong"), llm.tier_config("fast")
+    assert strong.model == "openai/gpt-oss-120b" and strong.api_key == "gsk-test" and strong.max_input_tokens == 5200
+    assert fast.base_url.startswith("https://generativelanguage") and llm.input_budget("fast") is None
+    sent = []
+
+    def fake_post(config, messages, max_tokens, timeout):
+        sent.append((config.model, max_tokens, isinstance(messages[1]["content"], str)))
+        return {"ok": config.tier}, {}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    result, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user="small", max_tokens=12000)
+    assert result == {"ok": "strong"} and sent[-1] == ("openai/gpt-oss-120b", 2600, True)
+    big = "word " * 30000  # ~40k tokens: cannot go to Groq in one request
+    result, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user=big)
+    assert meta["degraded_from"] == "openai/gpt-oss-120b" and "per-request budget" in meta["degraded_reason"]
+    assert sent[-1][0] == "gemini-3.5-flash-lite"

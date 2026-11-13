@@ -319,8 +319,15 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
     statements = db.scalars(select(ManagementStatement).where(ManagementStatement.company_id == company.id,
                                                               ManagementStatement.review_status == "approved")
                             .order_by(ManagementStatement.transcript_date.desc(), ManagementStatement.id)).all()
-    statements = statements[:40]
     table = delivered_table(db, company)
+    # Most decision-relevant first: quantified targets, then most recent.
+    statements.sort(key=lambda s: (s.target_low is None, -(s.transcript_date.toordinal() if s.transcript_date else 0), s.id))
+    budget = llm.input_budget("strong")
+    limit = 40
+    if budget:
+        fixed = llm.estimate_tokens(ASSESS_SYSTEM + ASSESS_USER + _table_text(table)) + 200
+        limit = max(6, min(40, (budget - fixed) // 105))
+    statements = statements[:limit]
     record = db.scalar(select(NarrativeAssessment).where(NarrativeAssessment.company_id == company.id))
     if not statements:
         payload = {"status": "no_guidance", "message": "No grounded guidance statements are indexed for this company yet.", "delivered": table}

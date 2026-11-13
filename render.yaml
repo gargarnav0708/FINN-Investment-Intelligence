@@ -12,8 +12,12 @@ services:
         sync: false            # paste your Gemini key in the Render dashboard; never commit it
       - key: FINN_LLM_FAST_MODEL
         value: gemini-3.5-flash-lite
+      - key: FINN_LLM_STRONG_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: FINN_LLM_STRONG_API_KEY
+        sync: false            # Groq key (free) for the reasoning tier
       - key: FINN_LLM_STRONG_MODEL
-        value: gemini-3.8-flash
+        value: openai/gpt-oss-120b
       - key: TAVILY_API_KEY
         sync: false            # optional: web background for management changes
       - key: APP_ENV

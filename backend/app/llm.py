@@ -153,8 +153,11 @@ def _post(config: TierConfig, messages: list[dict], max_tokens: int, timeout: in
             retry_after = response.headers.get("Retry-After")
             time.sleep(float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else 8 * (attempt + 1))
             continue
-        if response.status_code == 400 and "reasoning_effort" in payload and "reasoning" in response.text.lower():
-            payload.pop("reasoning_effort")  # model does not support the parameter; retry without it
+        if response.status_code == 400 and "reasoning_effort" in payload:
+            payload.pop("reasoning_effort")  # model rejects this thinking setting; retry without it
+            continue
+        if response.status_code == 400 and "response_format" in payload:
+            payload.pop("response_format")  # some models reject strict JSON mode; the prompt still asks for JSON
             continue
         if response.status_code >= 400:
             raise LLMUnavailable(f"HTTP {response.status_code}: {response.text[:500]}")

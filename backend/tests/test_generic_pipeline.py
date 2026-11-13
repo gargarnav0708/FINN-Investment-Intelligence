@@ -316,3 +316,25 @@ def test_narrative_assessment_checks_cited_numbers(db, monkeypatch):
     assert payload["verdicts"][0]["verdict"] == "unverified" and payload["verdicts"][0]["numbers_checked"] is False
     view = guidance.narrative_payload(db, company)
     assert view["calls"][0]["items"][0]["quote"] and view["delivered"]["latest_quarter"] == "Q2 FY27"
+
+
+def test_400_drops_optional_parameters_and_retries(db, monkeypatch):
+    seen = []
+
+    class Resp:
+        def __init__(self, code, body):
+            self.status_code, self._body, self.text, self.headers = code, body, str(body), {}
+        def json(self):
+            return self._body
+
+    def fake_post(url, json, headers, timeout):
+        seen.append(set(json))
+        if "reasoning_effort" in json or "response_format" in json:
+            return Resp(400, {"error": {"message": "Request contains an invalid argument."}})
+        return Resp(200, {"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {}})
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm, "_pace", lambda config: None)
+    result, _ = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="retry")
+    assert result == {"ok": True}
+    assert "reasoning_effort" in seen[0] and "response_format" not in seen[-1]

@@ -11,8 +11,8 @@ services:
       - key: FINN_LLM_API_KEY
         sync: false            # paste your Gemini key in the Render dashboard; never commit it
       - key: FINN_LLM_FAST_MODEL
-        value: gemini-2.5-flash-lite
+        value: gemini-3.5-flash-lite
       - key: FINN_LLM_STRONG_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.8-flash
       - key: APP_ENV
         value: production

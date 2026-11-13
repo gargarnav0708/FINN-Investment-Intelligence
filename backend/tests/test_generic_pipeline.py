@@ -105,7 +105,7 @@ def test_router_caches_by_input_and_records_usage(db, monkeypatch):
     second, meta2 = llm.complete_json(db, tier="fast", purpose="t", prompt_version="v1", system="s", user="u")
     assert first == second == {"ok": True}
     assert meta1["cached"] is False and meta2["cached"] is True
-    assert sent == ["gemini-2.5-flash-lite"]
+    assert sent == ["gemini-3.5-flash-lite"]
     summary = llm.usage_summary(db)
     assert summary["total_calls"] == 1 and summary["total_cache_hits"] == 1 and summary["input_tokens"] == 100
 
@@ -118,7 +118,7 @@ def test_strong_tier_degrades_to_fast_when_quota_exhausted(db, monkeypatch):
 
     monkeypatch.setattr(llm, "_post", fake_post)
     result, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user="u2")
-    assert result == {"ok": "fast"} and meta["degraded_from"] == "gemini-2.5-flash"
+    assert result == {"ok": "fast"} and meta["degraded_from"] == "gemini-3.8-flash"
 
 
 def test_router_disabled_without_key(db, monkeypatch):

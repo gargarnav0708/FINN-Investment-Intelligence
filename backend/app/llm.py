@@ -13,8 +13,8 @@ OpenAI-compatible endpoint (free tier: Flash-Lite for bulk work, Flash for reaso
 Environment:
     FINN_LLM_API_KEY      (or GEMINI_API_KEY)   required to enable model features
     FINN_LLM_BASE_URL     default https://generativelanguage.googleapis.com/v1beta/openai
-    FINN_LLM_FAST_MODEL   default gemini-2.5-flash-lite
-    FINN_LLM_STRONG_MODEL default gemini-2.5-flash
+    FINN_LLM_FAST_MODEL   default gemini-3.5-flash-lite
+    FINN_LLM_STRONG_MODEL default gemini-3.8-flash
     FINN_LLM_FAST_RPM / FINN_LLM_STRONG_RPM     client-side pacing (default 12 / 8)
 """
 from __future__ import annotations
@@ -61,10 +61,10 @@ def tier_config(tier: str) -> TierConfig | None:
     key = _env("FINN_LLM_API_KEY") or _env("GEMINI_API_KEY")
     base = (_env("FINN_LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
     if tier == "fast":
-        model = _env("FINN_LLM_FAST_MODEL") or _env("FINN_LLM_MODEL") or "gemini-2.5-flash-lite"
+        model = _env("FINN_LLM_FAST_MODEL") or _env("FINN_LLM_MODEL") or "gemini-3.5-flash-lite"
         rpm = float(_env("FINN_LLM_FAST_RPM") or 12)
     elif tier == "strong":
-        model = _env("FINN_LLM_STRONG_MODEL") or _env("FINN_LLM_MODEL") or "gemini-2.5-flash"
+        model = _env("FINN_LLM_STRONG_MODEL") or _env("FINN_LLM_MODEL") or "gemini-3.8-flash"
         rpm = float(_env("FINN_LLM_STRONG_RPM") or 8)
     else:
         raise ValueError(f"Unknown model tier: {tier}")

@@ -368,3 +368,12 @@ def test_strong_failure_reason_is_reported_when_degrading(db, monkeypatch):
     monkeypatch.setattr(llm, "_post", fake_post)
     _, meta = llm.complete_json(db, tier="strong", purpose="t", prompt_version="v1", system="s", user="quota")
     assert meta["degraded_from"] == "gemini-3.8-flash" and "429" in meta["degraded_reason"]
+
+
+def test_grounding_survives_pdf_line_breaks_and_hyphenation():
+    pages = {7: "TATA POWER  Q4 FY26 Earnings Call\nPraveer Sinha: We expect to com-\nmission 2.5 GW of\nrenewable capacity this year, and our\n\nPage 7 of 22\nnet debt to EBITDA should\nremain below 3x."}
+    page, _ = guidance._ground("We expect to commission 2.5 GW of renewable capacity this year", 3, pages)
+    assert page == 7
+    page, _ = guidance._ground("We expect to commission 2.5 GW of renewable capacity this year, and our net debt to EBITDA should remain below 3x", 7, pages)
+    assert page == 7  # running page header inside the quote is tolerated
+    assert guidance._ground("We will double net profit to 10,000 crore next year", 7, pages) == (None, None)

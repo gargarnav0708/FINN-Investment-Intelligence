@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
+from difflib import SequenceMatcher
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select
@@ -27,7 +28,7 @@ from .models import (CommitmentAssessment, Company, DocumentPage, FinancialObser
                      NarrativeAssessment, ProviderFinancialObservation, SourceDocument)
 
 EXTRACT_VERSION = "guidance-extract-v1"
-ASSESS_VERSION = "narrative-assess-v1"
+ASSESS_VERSION = "narrative-assess-v2"
 PARSER_VERSION = "llm-guidance-v1"
 METRICS = ("revenue_growth", "revenue", "ebitda_margin", "ebitda", "ebitda_growth", "pat", "pat_growth", "pat_margin",
            "capex", "volume_growth", "order_book", "order_inflow", "net_debt", "dividend", "capacity", "market_share",
@@ -72,13 +73,17 @@ Transcript:
 ASSESS_SYSTEM = """You are an equity analyst holding management to account. You judge each guidance statement
 ONLY against the DELIVERED table provided (company filings). Do not use outside knowledge of the company.
 Rules:
-- "pending" if the target period has not finished relative to the latest delivered period.
+- "pending" ONLY if the target period ends AFTER the latest delivered period. Indian fiscal years end on
+  31 March (FY26 = Apr 2025-Mar 2026). If the target period has ended and the table has that period
+  (annual rows for full-year targets, quarterly rows for quarter targets), you MUST judge it.
+- For a target whose period is still running, you may still say "partly" or "missed" when the year-to-date
+  quarters make the target clearly unreachable or clearly on track; otherwise "pending".
 - "not_measurable" if the table has no metric that measures the guidance.
 - "delivered" / "exceeded" / "missed" / "partly" only with explicit numbers from the table.
 - Every number you cite must be copied from the table (same metric key and period).
 Be terse and specific. Return ONLY JSON."""
 
-ASSESS_USER = """Company: {company} ({ticker}). Latest delivered quarter: {latest}.
+ASSESS_USER = """Company: {company} ({ticker}). Today: {today}. Latest delivered quarter: {latest}. Latest delivered full year: {latest_year}.
 
 GUIDANCE (id, said on, speaker, quote, parsed target):
 {guidance}
@@ -104,21 +109,36 @@ def _norm(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def _compact(text: str) -> str:
+    return re.sub(r"[^a-z0-9%]", "", _norm(text))
+
+
 def _ground(quote: str, page_hint: int | None, pages: dict[int, str]) -> tuple[int | None, str | None]:
-    """Return (page, exact_quote) if the quote is verbatim in the transcript, else (None, None)."""
-    target = _norm(quote).strip(" .\"'")
+    """Return (page, quote) if the quote is in the transcript, else (None, None).
+
+    PDF text breaks sentences with line ends, hyphenation and running page headers, so matching is
+    done on letters and digits only; a quote is accepted if >= 90% of it appears on one page in long
+    (12+ character) in-order runs within a short stretch of text. Paraphrases and inventions fail.
+    """
+    target = _compact(quote)
     if len(target) < 20:
         return None, None
     order = ([page_hint] if page_hint in pages else []) + [p for p in sorted(pages) if p != page_hint]
+    compact_pages = {p: _compact(pages[p]) for p in order}
     for page in order:
-        body = _norm(pages[page])
-        if target in body:
+        if target in compact_pages[page]:
             return page, quote.strip()
-    # Model sometimes trims a trailing clause: accept a >= 80% prefix match on the hinted page.
-    if page_hint in pages:
-        prefix = target[: max(20, int(len(target) * 0.8))]
-        if prefix in _norm(pages[page_hint]):
-            return page_hint, quote.strip()
+    for page in order:
+        body = compact_pages[page]
+        blocks = [b for b in SequenceMatcher(None, body, target, autojunk=False).get_matching_blocks() if b.size >= 12]
+        if not blocks:
+            continue
+        covered = sum(b.size for b in blocks)
+        span = (blocks[-1].a + blocks[-1].size) - blocks[0].a
+        # >= 90% of the quote in long in-order runs, within a short stretch of the page
+        # (tolerates hyphenation, page headers/footers and a dropped filler word; not paraphrase).
+        if covered >= 0.9 * len(target) and span <= 1.3 * len(target) + 40:
+            return page, quote.strip()
     return None, None
 
 
@@ -323,6 +343,8 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
                                      system=ASSESS_SYSTEM, max_tokens=12000,
                                      user=ASSESS_USER.format(company=company.name, ticker=company.ticker,
                                                              latest=table.get("latest_quarter") or "unknown",
+                                                             latest_year=(table["annual"][-1]["period"] if table.get("annual") else "unknown"),
+                                                             today=date.today().isoformat(),
                                                              guidance=guidance_text, table=table_text))
     by_id = {s.id: s for s in statements}
     verdicts = []

@@ -344,7 +344,7 @@ def assess_narrative(db: Session, company: Company, force: bool = False) -> dict
         f"\"{s.exact_quote}\" | metric={s.metric_name}; target={s.target_low}-{s.target_high} {s.unit or ''}; period={s.target_period or 'unspecified'}; {s.assumptions or ''}"
         for s in statements)
     table_text = _table_text(table)
-    input_hash = hashlib.sha256((guidance_text + table_text).encode()).hexdigest()
+    input_hash = hashlib.sha256((ASSESS_VERSION + guidance_text + table_text).encode()).hexdigest()  # prompt changes invalidate it
     if record and record.input_hash == input_hash and record.status == "available" and not force:
         return record.payload
     lines = guidance_text.split("\n")

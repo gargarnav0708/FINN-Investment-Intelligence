@@ -480,3 +480,30 @@ updateTodayChrome();
   const baseChrome=updateModeChrome;
   updateModeChrome=function(){baseChrome();if(dataMode==='demo'){document.getElementById('modeLabel').textContent='DEMO · FICTIONAL';document.body.classList.add('demo-mode')}else document.body.classList.remove('demo-mode');updateTodayChrome()};
 }
+
+/* Five-year fundamentals (screener.in standardised statements) */
+async function loadFundamentals(ticker){
+  const host=document.getElementById('fundamentals');if(!host)return;
+  if(dataMode!=='live'){host.innerHTML='';return}
+  try{const f=await apiGet(`/api/financials/${encodeURIComponent(ticker)}/fundamentals`);if(selectedCompany?.ticker!==ticker)return;renderFundamentals(f)}
+  catch{host.innerHTML=''}
+}
+function renderFundamentals(f){
+  const host=document.getElementById('fundamentals');
+  const head=`<div class="section-head"><div><span class="section-kicker">FIVE-YEAR VIEW · TRAJECTORY, DEBT & CASH</span><h2 id="fundamentalsTitle">Fundamentals</h2></div><span class="period-placeholder">${escapeHtml(f.basis||'')} · ₹ crore</span></div>`;
+  if(f.status!=='available'){host.innerHTML=head+`<div class="empty-filter">${escapeHtml(f.message||'Not available yet.')}</div>`;return}
+  const fmt=v=>v==null?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:0});
+  const pct=v=>v==null?'—':`${Number(v)>0?'+':''}${Number(v).toFixed(1)}%`;
+  const signals=(f.signals||[]).map(s=>`<div class="fund-signal ${s.flag?'watch':''}" title="${escapeHtml(s.formula||'')}"><span>${escapeHtml(s.label)}</span><b>${s.unit==='%'?pct(s.value):s.unit==='pp'?`${s.value>0?'+':''}${s.value} pp`:s.unit==='×'?`${s.value}×`:`${s.value>0?'+':''}${fmt(s.value)} cr`}</b>${s.detail?`<small>${escapeHtml(s.detail)}</small>`:''}</div>`).join('');
+  const flags=(f.flags||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('');
+  const q=f.quarterly||[];const maxRev=Math.max(...q.map(r=>r.revenue||0),1);
+  const bars=q.length?`<div class="fund-quarters">${q.map(r=>`<div class="fq"><i style="height:${Math.max(4,Math.round((r.revenue||0)/maxRev*72))}px" title="Revenue ₹${fmt(r.revenue)} cr"></i><b>${r.ebitda_margin_pct!=null?Number(r.ebitda_margin_pct).toFixed(1)+'%':'—'}</b><span>${escapeHtml(r.period)}</span></div>`).join('')}</div><p class="fund-caption">Quarterly revenue (bars) and EBITDA margin · latest ${escapeHtml(q.at(-1).period)}: revenue ${fmt(q.at(-1).revenue)} cr, YoY ${pct(q.at(-1).revenue_growth_pct)}</p>`:'';
+  const a=f.annual||[];
+  const row=(label,key,fn)=>`<tr><th>${label}</th>${a.map(y=>`<td>${fn(y[key])}</td>`).join('')}</tr>`;
+  const table=a.length?`<div class="fund-table-wrap"><table class="fund-table"><thead><tr><th></th>${a.map(y=>`<th>${escapeHtml(y.period)}</th>`).join('')}</tr></thead><tbody>${row('Revenue','revenue',fmt)}${row('Growth','revenue_growth_pct',pct)}${row('EBITDA margin','ebitda_margin_pct',v=>v==null?'—':Number(v).toFixed(1)+'%')}${row('PAT','pat',fmt)}${row('Borrowings','borrowings',fmt)}${row('Net worth','net_worth',fmt)}${row('Debt / equity','debt_to_equity',v=>v==null?'—':v+'×')}${row('Operating cash flow','cfo',fmt)}${row('OCF / PAT','cfo_to_pat',v=>v==null?'—':v+'×')}</tbody></table></div>`:'';
+  host.innerHTML=head+(signals?`<div class="fund-signals">${signals}</div>`:'')+(flags?`<ul class="fund-flags">${flags}</ul>`:'')+bars+table+`<p class="fund-source">${escapeHtml(f.source)}. Hover a figure for its formula.</p>`;
+}
+{
+  const baseFin=loadCompanyFinancials;
+  loadCompanyFinancials=async function(ticker){loadFundamentals(ticker);return baseFin(ticker)};
+}

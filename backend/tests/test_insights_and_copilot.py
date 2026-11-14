@@ -195,3 +195,22 @@ def test_scheduler_due_only_on_weekdays_after_close():
     assert not due(datetime(2026, 11, 13, 15, 0, tzinfo=ist), None, run_at)       # before close
     assert not due(datetime(2026, 11, 14, 17, 0, tzinfo=ist), None, run_at)       # Saturday
     assert not due(datetime(2026, 11, 13, 17, 0, tzinfo=ist), date(2026, 11, 13), run_at)  # already ran today
+
+
+def test_fundamentals_from_screener_tables(db):
+    from pathlib import Path
+    from backend.app.fundamentals import fundamentals
+    from backend.app.pipeline import store_screener_rows
+    from backend.app.providers import screener
+    c = company(db, "DIXON", "Dixon Technologies")
+    html = (Path(__file__).parent / "fixtures" / "screener_company.html").read_text()
+    store_screener_rows(db, c, screener.parse_company_page(html, "DIXON", "https://www.screener.in/company/DIXON/consolidated/"))
+    f = fundamentals(db, c)
+    years = {a["period"]: a for a in f["annual"]}
+    assert set(years) >= {"FY24", "FY25", "FY26"}
+    assert years["FY25"]["revenue_growth_pct"] == round((38860 / 17691 - 1) * 100, 1)
+    assert years["FY26"]["cfo_to_pat"] == round(1420 / 1206, 2)
+    assert years["FY26"]["debt_to_equity"] == round(650 / 4300, 2)
+    keys = {s["key"]: s for s in f["signals"]}
+    assert keys["revenue_cagr"]["value"] == round(((48438 / 17691) ** 0.5 - 1) * 100, 1)
+    assert len(f["quarterly"]) >= 6 and f["quarterly"][-1]["period"] == "Q2 FY27"

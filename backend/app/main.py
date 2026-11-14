@@ -920,6 +920,13 @@ def financial_history(
     return {"ticker": company.ticker, "metric": metric, "statement_basis": statement_basis, "count": len(data), "data": data}
 
 
+@app.get("/api/financials/{ticker}/fundamentals")
+def financial_fundamentals(ticker: str, db: Session = Depends(get_db)) -> dict:
+    """Five-year trajectory, balance-sheet and cash quality for any researched company."""
+    from .fundamentals import fundamentals
+    return fundamentals(db, _get_company(db, ticker))
+
+
 @app.get("/api/financials/{ticker}/analysis")
 def financial_analysis(
     ticker: str,
@@ -1232,6 +1239,18 @@ def extraction_status(db: Session = Depends(get_db)) -> dict:
 @app.get("/", include_in_schema=False)
 def root():
     return FileResponse(PROJECT_ROOT / "index.html")
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest() -> FileResponse:
+    return FileResponse(PROJECT_ROOT / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/icons/{name}", include_in_schema=False)
+def app_icon(name: str) -> FileResponse:
+    if not re.fullmatch(r"finn-(180|192|512)\.png", name):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(PROJECT_ROOT / "icons" / name, media_type="image/png")
 
 
 @app.get("/styles.css", include_in_schema=False)

@@ -17,7 +17,7 @@ It is an analysis tool, not investment advice.
 
 FINN is a mobile-first web app: there is nothing to install from an app store. It runs in the phone's browser and can be added to the home screen, where it opens full-screen like a native app.
 
-**Option 1: the deployed link (no setup).** Open **<DEPLOYED_URL>** in Chrome (Android) or Safari (iPhone). The free host sleeps when idle, so the first load can take up to a minute.
+**Option 1: the deployed link (no setup).** Open **<https://finn-vno3.onrender.com>** in Chrome (Android) or Safari (iPhone). The free host sleeps when idle, so the first load can take up to a minute.
 
 **Option 2: run it on a laptop and open it from a phone on the same Wi-Fi.**
 

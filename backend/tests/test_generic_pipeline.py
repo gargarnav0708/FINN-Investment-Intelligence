@@ -448,3 +448,19 @@ def test_assessment_is_batched_on_small_budget_provider(db, monkeypatch):
     payload = guidance.assess_narrative(db, company, force=True)
     assert calls.count("narrative_assess") >= 2 and calls[-1] == "narrative_scorecard"
     assert payload["counts"] == {"pending": 14} and payload["scorecard"]["headline"] == "All judged."
+
+
+def test_board_meeting_outcome_with_read_results_is_a_results_item(db, monkeypatch):
+    from backend.app.intelligence import classify_announcement
+    company = _company(db)
+    doc = _results_document(db, company)
+    ann = Announcement(company_id=company.id, exchange="NSE", dedupe_key="obm", subject="Outcome of Board Meeting", details="Outcome of Board Meeting",
+                       announcement_datetime=datetime(2026, 11, 5, tzinfo=timezone.utc), attachment_url=doc.download_url,
+                       source_page_url="https://www.nseindia.com", source="NSE")
+    db.add(ann); db.commit()
+    assert classify_announcement(ann)["category"] == "unclassified"
+    _fake_llm(monkeypatch, {"results_headline": GOOD_LLM})
+    results_extraction.extract_results_document(db, doc)
+    c = classify_announcement(ann)
+    assert c["category"] == "results" and c["materiality"] == "high"
+    assert c["summary"].startswith("Q2 FY27: revenue ₹16,100 cr (+8.4% YoY); PAT ₹445 cr (+8.0% YoY)")

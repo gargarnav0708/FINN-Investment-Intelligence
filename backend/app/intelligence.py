@@ -92,7 +92,55 @@ def keyword_materiality(item: Announcement, category: str) -> str:
     return level
 
 
+def _results_override(item: Announcement) -> dict | None:
+    """A filing whose attachment was machine-read as a results statement IS a results filing,
+    whatever its title says ("Outcome of Board Meeting" is how most companies file results)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import object_session
+    from .models import ResultsExtraction, SourceDocument
+    db = object_session(item)
+    if db is None or not item.attachment_url:
+        return None
+    record = db.scalar(select(ResultsExtraction).join(SourceDocument, SourceDocument.id == ResultsExtraction.document_id).where(
+        SourceDocument.company_id == item.company_id, SourceDocument.download_url == item.attachment_url,
+        ResultsExtraction.status != "failed"))
+    if record is None or not (record.payload or {}).get("metrics"):
+        return None
+
+    def cell(metric: str) -> tuple[float | None, float | None]:
+        series = record.payload["metrics"].get(metric) or []
+        cur = series[0].get("value_in_crore") if series else None
+        ago = series[2].get("value_in_crore") if len(series) > 2 else None
+        return cur, ((cur / ago - 1) * 100 if cur is not None and cur > 0 and ago and ago > 0 else None)
+
+    (rev, rev_yoy), (pat, pat_yoy) = cell("revenue"), cell("pat")
+    if rev is None and pat is None:
+        return None
+    from .research import fiscal_period
+    label = ""
+    if record.period_end:
+        fy, fq = fiscal_period(record.period_end)
+        label = f"{fq} FY{fy[-2:]}: " if fy and fq else ""
+    def part(name: str, v: float | None, y: float | None) -> str | None:
+        if v is None:
+            return None
+        if name == "PAT" and v < 0:
+            return f"net loss ₹{-v:,.0f} cr"
+        return f"{name} ₹{v:,.0f} cr" + (f" ({y:+.1f}% YoY)" if y is not None else "")
+    summary = label + "; ".join(x for x in (part("revenue", rev, rev_yoy), part("PAT", pat, pat_yoy)) if x)
+    if record.status != "verified":
+        summary += " (unverified)"
+    return {"category": "results", "category_label": TAXONOMY["results"][0], "materiality": "high",
+            "materiality_reason": TAXONOMY["results"][2], "summary": summary, "classification_method": "results_filing", "people": []}
+
+
 def classify_announcement(item: Announcement) -> dict:
+    try:
+        override = _results_override(item)
+    except Exception:
+        override = None
+    if override is not None:
+        return override
     try:
         insight = item.insight
     except Exception:

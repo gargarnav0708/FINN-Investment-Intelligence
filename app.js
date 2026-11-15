@@ -507,3 +507,32 @@ function renderFundamentals(f){
   const baseFin=loadCompanyFinancials;
   loadCompanyFinancials=async function(ticker){loadFundamentals(ticker);return baseFin(ticker)};
 }
+
+/* Open on the first window that has something to show (24h → 7d → 30d), and say so.
+   A user's own window choice is never overridden. Also: no warning-style box when all is well. */
+{
+  let userPickedWindow=false;
+  const select=document.getElementById('digestWindow');
+  select?.addEventListener('change',()=>{userPickedWindow=true;const n=document.getElementById('autoWindowNote');if(n)n.remove()},true);
+  const inner=loadDigest;
+  loadDigest=async function(){
+    await inner();
+    if(dataMode!=='live'||userPickedWindow||!select)return;
+    const order=['24h','7d','30d'];let at=order.indexOf(select.value);
+    const material=()=>digestAnnouncements.some(a=>a.priority!=='routine');
+    while(at>-1&&at<order.length-1&&!material()){
+      at+=1;select.value=order[at];await inner();
+    }
+    if(order[at]!=='24h'){
+      let note=document.getElementById('autoWindowNote');
+      if(!note){note=document.createElement('p');note.id='autoWindowNote';note.className='auto-window-note';document.getElementById('topCards')?.before(note)}
+      note.textContent=`Nothing material in the last 24 hours, so this shows the last ${order[at]==='7d'?'7 days':'30 days'}.`;
+    }
+  };
+  const baseNotice=startupNotice;
+  startupNotice=function(message,mode='loading'){
+    baseNotice(message,mode);
+    const host=document.querySelector('#todayView .demo-notice');
+    if(host)host.hidden=mode==='ready';
+  };
+}

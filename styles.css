@@ -239,3 +239,5 @@ body.demo-mode .mode-toggle{border-color:#6b4a1f;color:var(--amber)}
 .fund-table th,.fund-table td{padding:7px 9px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-soft)}
 .fund-table thead th{color:var(--muted);font-weight:600}
 .fund-table tbody th{text-align:left;color:var(--muted);font:500 11px var(--font);position:sticky;left:0;background:var(--bg)}
+.auto-window-note{margin:0 0 10px;font-size:11.5px;color:var(--muted)}
+.demo-notice[hidden]{display:none!important}

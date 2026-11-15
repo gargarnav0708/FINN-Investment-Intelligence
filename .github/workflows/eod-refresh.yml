@@ -11,9 +11,9 @@ jobs:
     steps:
       - name: Wake the service and start the refresh
         run: |
-          test -n "${{ vars.FINN_URL }}" || { echo "Set the FINN_URL repository variable"; exit 1; }
+          URL="${{ vars.FINN_URL }}"; URL="${URL:-https://finn-vno3.onrender.com}"
           for i in 1 2 3 4 5; do
-            curl -fsS --max-time 90 "${{ vars.FINN_URL }}/api/health" && break
+            curl -fsS --max-time 90 "$URL/api/health" && break
             sleep 20
           done
-          curl -fsS --max-time 60 -X POST "${{ vars.FINN_URL }}/api/refresh"
+          curl -fsS --max-time 60 -X POST "$URL/api/refresh"

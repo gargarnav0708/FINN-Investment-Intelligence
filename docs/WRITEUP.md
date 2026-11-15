@@ -1,6 +1,6 @@
 # FINN — writeup
 
-**Prototype:** _deployed link_ · **Repository:** _GitHub link_ · **AI build history:** `docs/BUILD_HISTORY.md` (with conversation links)
+**Prototype:** https://finn-vno3.onrender.com · **Repository:** https://github.com/gargarnav0708/FINN-Investment-Intelligence · **AI build history:** `docs/BUILD_HISTORY.md` (with conversation links)
 
 ## What I built
 

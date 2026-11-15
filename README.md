@@ -13,6 +13,31 @@ It is an analysis tool, not investment advice.
 
 **Demo research tickers:** TATAPOWER, INFY, TITAN, DIXON (DIXON is outside the portfolio). Any other NSE symbol works from Research → search → Commitments → "Read last 4 concalls + results".
 
+## Try it on your phone
+
+FINN is a mobile-first web app: there is nothing to install from an app store. It runs in the phone's browser and can be added to the home screen, where it opens full-screen like a native app.
+
+**Option 1: the deployed link (no setup).** Open **<DEPLOYED_URL>** in Chrome (Android) or Safari (iPhone). The free host sleeps when idle, so the first load can take up to a minute.
+
+**Option 2: run it on a laptop and open it from a phone on the same Wi-Fi.**
+
+```sh
+python -m pip install -r backend/requirements.txt
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8001
+```
+
+Find the laptop's Wi-Fi address (`ipconfig getifaddr en0` on macOS, `hostname -I` on Linux, `ipconfig` on Windows) and open `http://<that-address>:8001` on the phone, e.g. `http://192.168.1.23:8001`. Both devices must be on the same network; allow incoming connections if the laptop's firewall asks. On a fresh clone the app loads the bundled database snapshot (`snapshot/finn.db.gz`) on first start, so it shows data without any API keys; keys are only needed to read new filings.
+
+**Add it to the home screen (optional).**
+- iPhone (Safari): Share → **Add to Home Screen**.
+- Android (Chrome): ⋮ menu → **Add to Home screen** / **Install app**. Chrome only offers "Install app" over HTTPS, so use the deployed link for this.
+
+**A two-minute tour on the phone.**
+1. **Today**: swipe the "What matters" cards (results numbers, management changes), then scroll the digest; change the window to 7 or 30 days.
+2. **Research** → pick Titan or Tata Power, or search any NSE ticker → **Overview** (business mix, bull vs bear), **Financials** (five-year fundamentals), **Commitments** (promised vs delivered).
+3. Tap **Ask FINN** (bottom right) and ask "What were the most important developments this week?"
+4. For a company not yet researched: Commitments → **Read last 4 concalls + results** (takes a few minutes; needs the model keys on the server).
+
 ## Requirements
 
 - Python 3.10 or later
